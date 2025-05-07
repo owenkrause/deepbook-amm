@@ -7,6 +7,9 @@ use sui::coin::Coin;
 use sui::event;
 use deepbook::balance_manager;
 
+// === Errors ===
+const EInsufficientBalanceToWithdraw: u64 = 0;
+
 /// A shared object that holds funds used by the market maker
 public struct Vault has key, store {
   id: UID,
@@ -14,7 +17,7 @@ public struct Vault has key, store {
   balance_manager: balance_manager::BalanceManager,
 }
 
-/// An object store a user's balance
+/// An object that stores a user's balance
 public struct UserBalance has store, drop {
   amount: u64
 }
@@ -28,7 +31,7 @@ public struct BalanceEvent has copy, drop {
   deposit: bool
 }
 
-/// Initialize vault and share
+/// Initializes and shares vault object
 fun init(ctx: &mut TxContext) {
   let vault = Vault {
     id: object::new(ctx),
@@ -57,7 +60,7 @@ public fun deposit<T>(
     deposit: true,
   });
 
-  if (!vault.balances.contains(ctx.sender())) {
+  if (!vault.balances.contains(user)) {
     vault.balances.add(user, bag::new(ctx));
   };
 
@@ -70,4 +73,36 @@ public fun deposit<T>(
   user_balance.amount = user_balance.amount + coin_value;
 
   balance_manager::deposit(&mut vault.balance_manager, coin, ctx);
+}
+
+/// Withdraw from vault
+public fun withdraw<T>(
+  vault: &mut Vault,
+  amount: u64,
+  ctx: &mut TxContext,
+): Coin<T> {
+  let user = ctx.sender();
+  let coin_type = type_name::get<T>();
+
+  assert!(vault.balances.contains(user), EInsufficientBalanceToWithdraw);
+
+  let user_balances = vault.balances.borrow_mut(user);
+  assert!(user_balances.contains(coin_type), EInsufficientBalanceToWithdraw);
+
+  let user_balance = user_balances.borrow_mut<TypeName, UserBalance>(coin_type);
+  assert!(amount <= user_balance.amount, EInsufficientBalanceToWithdraw);
+
+  user_balance.amount = user_balance.amount - amount;
+
+  let coin = balance_manager::withdraw<T>(&mut vault.balance_manager, amount, ctx);
+
+  event::emit(BalanceEvent {
+    vault: object::id(vault),
+    user: user,
+    asset: coin_type,
+    amount: amount,
+    deposit: false,
+  });
+
+  coin
 }
