@@ -17,7 +17,7 @@ public struct Vault has key, store {
   balance_manager: balance_manager::BalanceManager,
 }
 
-/// An object that stores a user's balance
+/// An object that stores an user's balance
 public struct UserBalance has store, drop {
   amount: u64
 }
@@ -105,4 +105,9 @@ public fun withdraw<T>(
   });
 
   coin
+}
+
+/// Returns the balance_manager of the vault
+public fun balance_manager(self: &mut Vault): (&mut balance_manager::BalanceManager) {
+  &mut self.balance_manager
 }
