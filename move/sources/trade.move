@@ -1,4 +1,4 @@
-module deepbookamm::strategy;
+module deepbookamm::trade;
 
 use sui::clock::Clock;
 use deepbook::pool::{Pool, mid_price, place_limit_order, pool_book_params};
@@ -61,34 +61,34 @@ public fun create_spread_order<BaseAsset, QuoteAsset>(
   assert!(bid_adjustment * lot_size * bid_price <= quote_balance, EInsufficientQuoteAsset);
 
   let bid_order = place_limit_order<BaseAsset, QuoteAsset>(
-    pool, 
-    balance_manager, 
-    trade_proof, 
+    pool,
+    balance_manager,
+    trade_proof,
     0,
-    order_type, 
-    self_matching_option, 
-    bid_price, 
-    bid_adjustment, 
-    true, 
-    true, 
-    expire_timestamp, 
-    clock, 
+    order_type,
+    self_matching_option,
+    bid_price,
+    bid_adjustment,
+    true,
+    true,
+    expire_timestamp,
+    clock,
     ctx
   );
 
   let ask_order = place_limit_order<BaseAsset, QuoteAsset>(
-    pool, 
-    balance_manager, 
-    trade_proof, 
+    pool,
+    balance_manager,
+    trade_proof,
     0,
-    order_type, 
-    self_matching_option, 
-    ask_price, 
-    ask_adjustment, 
-    false, 
-    true, 
-    expire_timestamp, 
-    clock, 
+    order_type,
+    self_matching_option,
+    ask_price,
+    ask_adjustment,
+    false,
+    true,
+    expire_timestamp,
+    clock,
     ctx
   );
 
