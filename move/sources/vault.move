@@ -1,4 +1,4 @@
-module deepbookamm::vault;
+module deepbookamm::mm_vault;
 
 use std::type_name::{Self, TypeName};
 use sui::table::{Self, Table};
@@ -32,7 +32,7 @@ public struct BalanceEvent has copy, drop {
 }
 
 /// Initializes and shares vault object
-fun init(ctx: &mut TxContext) {
+public fun create_vault(ctx: &mut TxContext) {
   let vault = Vault {
     id: object::new(ctx),
     balances: table::new(ctx),
@@ -65,7 +65,7 @@ public fun deposit<T>(
   };
 
   let user_balances = vault.balances.borrow_mut(user);
-  if (user_balances.contains(coin_type)) {
+  if (!user_balances.contains(coin_type)) {
     user_balances.add(coin_type, UserBalance { amount: 0 });
   };
 
@@ -105,4 +105,27 @@ public fun withdraw<T>(
   });
 
   coin
+}
+
+/// Get the balance of a specific coin type for the caller
+public fun get_balance<T>(vault: &Vault, ctx: &TxContext): u64 {
+  let sender = ctx.sender();
+  let coin_type = type_name::get<T>();
+
+  if (!vault.balances.contains(sender)) {
+    return 0
+  };
+
+  let user_balances = vault.balances.borrow(sender);
+  if (!user_balances.contains(coin_type)) {
+    return 0
+  };
+
+  let user_balance = user_balances.borrow<TypeName, UserBalance>(coin_type);
+  user_balance.amount
+}
+
+/// Get the balance manager of the vault
+public fun get_balance_manager(vault: &mut Vault): &mut balance_manager::BalanceManager {
+  &mut vault.balance_manager
 }
