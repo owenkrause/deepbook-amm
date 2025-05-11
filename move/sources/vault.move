@@ -106,8 +106,3 @@ public fun withdraw<T>(
 
   coin
 }
-
-/// Returns the balance_manager of the vault
-public fun balance_manager(self: &mut Vault): (&mut balance_manager::BalanceManager) {
-  &mut self.balance_manager
-}
