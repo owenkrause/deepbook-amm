@@ -55,8 +55,7 @@ public fun create_spread_order<BaseAsset, QuoteAsset>(
   if (balanced) {
     bid_adjustment = order_size;
     ask_adjustment = order_size;
-  }
-  else if (base_heavy) {
+  } else if (base_heavy) {
     let skew_factor = imbalance_ratio - 100;
     let capped_skew = min(skew_factor as u64, max_skew_percent);
 
