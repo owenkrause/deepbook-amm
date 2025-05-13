@@ -80,6 +80,8 @@ fun test_create_spread_order() {
   let base_balance = balance_manager.balance<SUI>();
   let quote_balance = balance_manager.balance<USDC>();
   let base_in_quote = (base_balance as u128) * (mid_price as u128);
+
+  let balanced = base_in_quote == quote_balance as u128;
   let base_heavy = base_in_quote > (quote_balance as u128);
 
   let expected_bid_quantity;
@@ -87,7 +89,10 @@ fun test_create_spread_order() {
 
   let imbalance_ratio = 100 * base_in_quote / (quote_balance as u128);
 
-  if (base_heavy) {
+  if (balanced) {
+    expected_bid_quantity = order_size;
+    expected_ask_quantity = order_size;
+  } else if (base_heavy) {
     let skew_factor = imbalance_ratio - 100;
     let capped_skew = min(skew_factor as u64, max_skew_percent);
 
