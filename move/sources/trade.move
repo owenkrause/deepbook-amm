@@ -1,5 +1,6 @@
 module deepbookamm::trade;
 
+use std::u64::min;
 use sui::clock::Clock;
 use deepbook::pool::{Pool, mid_price, place_limit_order, pool_book_params};
 use deepbook::balance_manager::{BalanceManager, TradeProof, balance};
@@ -20,7 +21,7 @@ public fun create_spread_order<BaseAsset, QuoteAsset>(
   spread_bps: u64,
   order_size: u64,
   order_type: u8,
-  skew_percent: u64,
+  max_skew_percent: u64,
   self_matching_option: u8,
   expire_timestamp: u64,
   clock: &Clock,
@@ -39,26 +40,38 @@ public fun create_spread_order<BaseAsset, QuoteAsset>(
   let base_balance = balance<BaseAsset>(balance_manager);
   let quote_balance = balance<QuoteAsset>(balance_manager);
 
-  let base_in_quote = base_balance * mid_price;
-  let base_heavy = base_in_quote > quote_balance;
+  let base_in_quote = (base_balance as u128) * (mid_price as u128);
+  let balanced = base_in_quote == quote_balance as u128;
+  let base_heavy = base_in_quote > quote_balance as u128;
 
-  let half_spread = (mid_price * spread_bps) / 10000 / 2;
+  let half_spread = mid_price * spread_bps / 100 / 100 / 2;
   let bid_price = mid_price - half_spread;
   let ask_price = mid_price + half_spread;
 
   let bid_adjustment: u64;
   let ask_adjustment: u64;
+  let imbalance_ratio = 100 * base_in_quote / (quote_balance as u128);
 
-  if (base_heavy) {
-    bid_adjustment = order_size * (100 - skew_percent) / 100;
-    ask_adjustment = order_size * (100 + skew_percent) / 100;
+  if (balanced) {
+    bid_adjustment = order_size;
+    ask_adjustment = order_size;
+  }
+  else if (base_heavy) {
+    let skew_factor = imbalance_ratio - 100;
+    let capped_skew = min(skew_factor as u64, max_skew_percent);
+
+    bid_adjustment = order_size * (100 - capped_skew) / 100;
+    ask_adjustment = order_size * (100 + capped_skew) / 100;
   } else {
-    bid_adjustment = order_size * (100 + skew_percent) / 100;
-    ask_adjustment = order_size * (100 - skew_percent) / 100;
+    let skew_factor = imbalance_ratio - 100;
+    let capped_skew = min(skew_factor as u64, max_skew_percent);
+  
+    bid_adjustment = order_size * (100 + capped_skew) / 100;
+    ask_adjustment = order_size * (100 - capped_skew) / 100;
   };
 
-  assert!(ask_adjustment * lot_size <= base_balance, EInsufficientBaseAsset);
-  assert!(bid_adjustment * lot_size * bid_price <= quote_balance, EInsufficientQuoteAsset);
+  assert!((ask_adjustment as u128) * (lot_size as u128) <= (base_balance as u128), EInsufficientBaseAsset);
+  assert!((bid_adjustment as u128) * (lot_size as u128) <= (quote_balance as u128), EInsufficientQuoteAsset);
 
   let bid_order = place_limit_order<BaseAsset, QuoteAsset>(
     pool,
@@ -70,7 +83,7 @@ public fun create_spread_order<BaseAsset, QuoteAsset>(
     bid_price,
     bid_adjustment,
     true,
-    true,
+    false,
     expire_timestamp,
     clock,
     ctx
@@ -86,7 +99,7 @@ public fun create_spread_order<BaseAsset, QuoteAsset>(
     ask_price,
     ask_adjustment,
     false,
-    true,
+    false,
     expire_timestamp,
     clock,
     ctx
