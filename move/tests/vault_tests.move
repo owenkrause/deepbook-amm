@@ -2,8 +2,8 @@
 
 module deepbookamm::mm_vault_tests;
 
-use sui::coin::mint_for_testing;
 use sui::sui::SUI;
+use sui::coin::mint_for_testing;
 use sui::test_scenario::{begin, end, has_most_recent_shared, take_shared, return_shared};
 use deepbookamm::mm_vault::{Vault, create_vault, deposit, withdraw, get_balance, get_balance_manager};
 
@@ -11,6 +11,7 @@ use deepbookamm::mm_vault::{Vault, create_vault, deposit, withdraw, get_balance,
 fun test_create_vault() {
   let mut test = begin(@0xF);
   let alice = @0xA;
+
   test.next_tx(alice);
   {
     create_vault(test.ctx());
