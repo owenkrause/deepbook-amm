@@ -2,16 +2,29 @@
 
 [move]
 version = 3
-manifest_digest = "CD2285805C5C6A4F5B309480B876D4C099C2E02A12A3C1FEBB81E2EA175BA218"
-deps_digest = "3C4103934B1E040BB6B23F1D610B4EF9F2F1166A50A104EADCF77467C004C600"
+manifest_digest = "74865CCE6DC69DE9AC0464A43F3DEEF414B2FB5233F0F13F84157BC82B2037D6"
+deps_digest = "52B406A7A21811BEF51751CF88DA0E76DAEFFEAC888D4F4060B1A72BBE7D8D35"
 dependencies = [
+  { id = "Pyth", name = "Pyth" },
   { id = "Sui", name = "Sui" },
+  { id = "Wormhole", name = "Wormhole" },
   { id = "deepbook", name = "deepbook" },
+  { id = "token", name = "token" },
+  { id = "usdc", name = "usdc" },
 ]
 
 [[move.package]]
 id = "MoveStdlib"
 source = { git = "https://github.com/MystenLabs/sui.git", rev = "framework/mainnet", subdir = "crates/sui-framework/packages/move-stdlib" }
+
+[[move.package]]
+id = "Pyth"
+source = { git = "https://github.com/pyth-network/pyth-crosschain.git", rev = "sui-contract-mainnet", subdir = "target_chains/sui/contracts" }
+
+dependencies = [
+  { id = "Sui", name = "Sui" },
+  { id = "Wormhole", name = "Wormhole" },
+]
 
 [[move.package]]
 id = "Sui"
@@ -22,8 +35,16 @@ dependencies = [
 ]
 
 [[move.package]]
+id = "Wormhole"
+source = { git = "https://github.com/wormhole-foundation/wormhole.git", rev = "sui/mainnet", subdir = "sui/wormhole" }
+
+dependencies = [
+  { id = "Sui", name = "Sui" },
+]
+
+[[move.package]]
 id = "deepbook"
-source = { git = "https://github.com/MystenLabs/deepbookv3", rev = "v2.0.0", subdir = "packages/deepbook" }
+source = { git = "https://github.com/MystenLabs/deepbookv3.git", rev = "mainnet", subdir = "packages/deepbook" }
 
 dependencies = [
   { id = "Sui", name = "Sui" },
@@ -31,22 +52,41 @@ dependencies = [
 ]
 
 [[move.package]]
-id = "token"
-source = { git = "https://github.com/MystenLabs/deepbookv3", rev = "v2.0.0", subdir = "packages/deepbook/../token" }
+id = "stablecoin"
+source = { git = "https://github.com/circlefin/stablecoin-sui.git", rev = "master", subdir = "packages/stablecoin" }
 
 dependencies = [
   { id = "Sui", name = "Sui" },
+  { id = "sui_extensions", name = "sui_extensions" },
+]
+
+[[move.package]]
+id = "sui_extensions"
+source = { git = "https://github.com/circlefin/stablecoin-sui.git", rev = "master", subdir = "packages/sui_extensions" }
+
+dependencies = [
+  { id = "Sui", name = "Sui" },
+]
+
+[[move.package]]
+id = "token"
+source = { git = "https://github.com/MystenLabs/deepbookv3.git", rev = "mainnet", subdir = "packages/token" }
+
+dependencies = [
+  { id = "Sui", name = "Sui" },
+]
+
+[[move.package]]
+id = "usdc"
+source = { git = "https://github.com/circlefin/stablecoin-sui.git", rev = "master", subdir = "packages/usdc" }
+
+dependencies = [
+  { id = "Sui", name = "Sui" },
+  { id = "stablecoin", name = "stablecoin" },
+  { id = "sui_extensions", name = "sui_extensions" },
 ]
 
 [move.toolchain-version]
 compiler-version = "1.48.1"
 edition = "2024.beta"
 flavor = "sui"
-
-[env]
-
-[env.mainnet]
-chain-id = "35834a8a"
-original-published-id = "0x249a048a22710085f4c29f99e7acf23697ec152f8265ed8dcaad909827a361fd"
-latest-published-id = "0x249a048a22710085f4c29f99e7acf23697ec152f8265ed8dcaad909827a361fd"
-published-version = "1"
