@@ -1,4 +1,4 @@
-module deepbookamm::trade;
+module deepbookamm::strategy;
 
 use std::u64::min;
 use sui::clock::Clock;

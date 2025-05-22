@@ -1,12 +1,10 @@
 [package]
-name = "deepbookamm"
+name = "token"
 edition = "2024.beta" # edition = "legacy" to use legacy (pre-2024) Move
 # license = ""           # e.g., "MIT", "GPL", "Apache 2.0"
 # authors = ["..."]      # e.g., ["Joe Smith (joesmith@noemail.com)", "John Snow (johnsnow@noemail.com)"]
 
 [dependencies]
-Sui = { git = "https://github.com/MystenLabs/sui.git", subdir = "crates/sui-framework/packages/sui-framework", rev = "framework/mainnet" }
-deepbook = { r.mvr = "@deepbook/core" }
 
 # For remote import, use the `{ git = "...", subdir = "...", rev = "..." }`.
 # Revision can be a branch, a tag, and a commit hash.
@@ -20,7 +18,7 @@ deepbook = { r.mvr = "@deepbook/core" }
 # Override = { local = "../conflicting/version", override = true }
 
 [addresses]
-deepbookamm = "0x0"
+token = "0x0"
 
 # Named addresses will be accessible in Move as `@name`. They're also exported:
 # for example, `std = "0x1"` is exported by the Standard Library.
@@ -32,9 +30,6 @@ deepbookamm = "0x0"
 # Local = { local = "../path/to/dev-build" }
 
 [dev-addresses]
-
-[r.mvr]
-network = "mainnet"
 # The dev-addresses section allows overwriting named addresses for the `--test`
 # and `--dev` modes.
 # alice = "0xB0B"
