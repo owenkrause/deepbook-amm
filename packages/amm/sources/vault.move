@@ -1,41 +1,39 @@
 module deepbookamm::mm_vault;
 
-use std::type_name::{Self, TypeName};
-use sui::table::{Self, Table};
-use sui::bag::{Self, Bag};
-use sui::coin::Coin;
+use sui::clock::Clock;
+use sui::coin::{Coin, TreasuryCap};
 use sui::event;
+use sui::sui::SUI;
+use usdc::usdc::USDC;
+use token::deep::DEEP;
 use deepbook::balance_manager;
+use pyth::{pyth, price_info, price_identifier, price};
+use pyth::price_info::PriceInfoObject;
 
 // === Errors ===
-const EInsufficientBalanceToWithdraw: u64 = 0;
+const EInvalidID: u64 = 0;
 
 /// A shared object that holds funds used by the market maker
-public struct Vault has key, store {
+public struct Vault<phantom P> has key, store {
   id: UID,
-  balances: Table<address, Bag>,
+  lp_treasury_cap: TreasuryCap<P>,
   balance_manager: balance_manager::BalanceManager,
-}
-
-/// An object that stores an user's balance
-public struct UserBalance has store, drop {
-  amount: u64
 }
 
 /// Event emitted when a deposit or withdrawal occurs
 public struct BalanceEvent has copy, drop {
   vault: ID,
   user: address,
-  asset: TypeName,
-  amount: u64,
+  asset_amount: u64,
+  lp_amount: u64, 
   deposit: bool
 }
 
 /// Initializes and shares vault object
-public fun create_vault(ctx: &mut TxContext) {
-  let vault = Vault {
+public fun create_vault<T>(lp_treasury_cap: TreasuryCap<T>, ctx: &mut TxContext) {
+  let vault = Vault<T> {
     id: object::new(ctx),
-    balances: table::new(ctx),
+    lp_treasury_cap: lp_treasury_cap,
     balance_manager: balance_manager::new(ctx),
   };
 
@@ -44,88 +42,146 @@ public fun create_vault(ctx: &mut TxContext) {
 
 /// Deposit into vault
 public fun deposit<T>(
-  vault: &mut Vault,
-  coin: Coin<T>,
+  vault: &mut Vault<T>,
+  coin: Coin<DEEP>,
+  sui_price_info_object: &PriceInfoObject, 
+  deep_price_info_object: &PriceInfoObject,
+  usdc_price_info_object: &PriceInfoObject,
+  clock: &Clock,
   ctx: &mut TxContext,
-) {
+): Coin<T> {
   let user = ctx.sender();
-  let coin_value = coin.value();
-  let coin_type = type_name::get<T>();
+  let deposit_amount = coin.value();
+
+  vault.balance_manager.deposit(coin, ctx);  
+
+  let total_vault_value = get_total_value(
+    vault, 
+    sui_price_info_object, 
+    deep_price_info_object, 
+    usdc_price_info_object, 
+    clock
+  );
+
+    let total_lp_supply = vault.lp_treasury_cap.total_supply();
+  let lp_tokens_to_mint = (deposit_amount * total_lp_supply) / total_vault_value;
+
+  let lp = vault.lp_treasury_cap.mint(lp_tokens_to_mint, ctx);
 
   event::emit(BalanceEvent {
     vault: object::id(vault),
     user: user,
-    asset: coin_type,
-    amount: coin_value,
-    deposit: true,
+    asset_amount: deposit_amount,
+    lp_amount: lp_tokens_to_mint,
+    deposit: true
   });
 
-  if (!vault.balances.contains(user)) {
-    vault.balances.add(user, bag::new(ctx));
-  };
-
-  let user_balances = vault.balances.borrow_mut(user);
-  if (!user_balances.contains(coin_type)) {
-    user_balances.add(coin_type, UserBalance { amount: 0 });
-  };
-
-  let user_balance = user_balances.borrow_mut<TypeName, UserBalance>(coin_type);
-  user_balance.amount = user_balance.amount + coin_value;
-
-  balance_manager::deposit(&mut vault.balance_manager, coin, ctx);
+  lp
 }
 
 /// Withdraw from vault
 public fun withdraw<T>(
-  vault: &mut Vault,
-  amount: u64,
+  vault: &mut Vault<T>,
+  lp_coin: Coin<T>,
+  sui_price_info_object: &PriceInfoObject, 
+  deep_price_info_object: &PriceInfoObject,
+  usdc_price_info_object: &PriceInfoObject,
+  clock: &Clock,
   ctx: &mut TxContext,
-): Coin<T> {
+): Coin<DEEP> {
   let user = ctx.sender();
-  let coin_type = type_name::get<T>();
+  let lp_amount = lp_coin.value();
+  
+  let total_vault_value = get_total_value(
+    vault, 
+    sui_price_info_object, 
+    deep_price_info_object, 
+    usdc_price_info_object, 
+    clock
+  );
+  let total_lp_supply = vault.lp_treasury_cap.total_supply();
+  let user_vault_share = (lp_amount * total_vault_value) / total_lp_supply;
 
-  assert!(vault.balances.contains(user), EInsufficientBalanceToWithdraw);
+  let deep_price = get_deep_price(deep_price_info_object, clock);
+  let deep_to_withdraw = user_vault_share / deep_price;
+  let deep_coin = vault.balance_manager.withdraw<DEEP>(deep_to_withdraw, ctx);
 
-  let user_balances = vault.balances.borrow_mut(user);
-  assert!(user_balances.contains(coin_type), EInsufficientBalanceToWithdraw);
-
-  let user_balance = user_balances.borrow_mut<TypeName, UserBalance>(coin_type);
-  assert!(amount <= user_balance.amount, EInsufficientBalanceToWithdraw);
-
-  user_balance.amount = user_balance.amount - amount;
-
-  let coin = balance_manager::withdraw<T>(&mut vault.balance_manager, amount, ctx);
+  vault.lp_treasury_cap.burn(lp_coin);
 
   event::emit(BalanceEvent {
     vault: object::id(vault),
     user: user,
-    asset: coin_type,
-    amount: amount,
+    asset_amount: deep_coin.value(),
+    lp_amount: lp_amount,
     deposit: false,
   });
 
-  coin
-}
-
-/// Get the balance of a specific coin type for the caller
-public fun get_balance<T>(vault: &Vault, ctx: &TxContext): u64 {
-  let sender = ctx.sender();
-  let coin_type = type_name::get<T>();
-
-  if (!vault.balances.contains(sender)) {
-    return 0
-  };
-
-  let user_balances = vault.balances.borrow(sender);
-  if (!user_balances.contains(coin_type)) {
-    return 0
-  };
-
-  let user_balance = user_balances.borrow<TypeName, UserBalance>(coin_type);
-  user_balance.amount
+  deep_coin
 }
 
 /// Get the balance manager of the vault
-public fun get_balance_manager(vault: &mut Vault): &mut balance_manager::BalanceManager {
+public fun get_balance_manager<T>(vault: &mut Vault<T>): &mut balance_manager::BalanceManager {
   &mut vault.balance_manager
+}
+
+/// Get total value of vault
+fun get_total_value<T>(
+  vault: &Vault<T>, 
+  sui_price_info_object: &PriceInfoObject, 
+  deep_price_info_object: &PriceInfoObject,
+  usdc_price_info_object: &PriceInfoObject,
+  clock: &Clock,
+): u64 {
+  let usdc_price = get_usdc_price(usdc_price_info_object, clock);
+  let sui_price = get_sui_price(sui_price_info_object, clock);
+  let deep_price = get_deep_price(deep_price_info_object, clock);
+
+  let mut total_value = 0;
+  total_value = total_value + vault.balance_manager.balance<USDC>() * usdc_price;
+  total_value = total_value + vault.balance_manager.balance<SUI>() * sui_price;
+  total_value = total_value + vault.balance_manager.balance<DEEP>() * deep_price;
+
+  total_value
+}
+
+/// Get price of USDC
+fun get_usdc_price(price_info_object: &PriceInfoObject, clock: &Clock): u64 {
+  let max_age = 60;
+  let price_struct = pyth::get_price_no_older_than(price_info_object, clock, max_age);
+  let price_info = price_info::get_price_info_from_price_info_object(price_info_object);
+  let price_id = price_identifier::get_bytes(&price_info::get_price_identifier(&price_info));
+
+  assert!(price_id != x"eaa020c61cc479712813461ce153894a96a6c00b21ed0cfc2798d1f9a9e9c94a", EInvalidID);
+
+  let decimal_i64 = price::get_expo(&price_struct);
+
+  decimal_i64.get_magnitude_if_positive()
+}
+
+/// Get price of SUI
+fun get_sui_price(price_info_object: &PriceInfoObject, clock: &Clock): u64 {
+  let max_age = 60;
+  let price_struct = pyth::get_price_no_older_than(price_info_object, clock, max_age);
+  let price_info = price_info::get_price_info_from_price_info_object(price_info_object);
+  let price_id = price_identifier::get_bytes(&price_info::get_price_identifier(&price_info));
+
+  assert!(price_id != x"23d7315113f5b1d3ba7a83604c44b94d79f4fd69af77f804fc7f920a6dc65744", EInvalidID);
+
+  let decimal_i64 = price::get_expo(&price_struct);
+
+  decimal_i64.get_magnitude_if_positive()
+}
+
+/// Get price of DEEP
+fun get_deep_price(price_info_object: &PriceInfoObject, clock: &Clock): u64 {
+  let max_age = 60;
+  let price_struct = pyth::get_price_no_older_than(price_info_object, clock, max_age);
+  let price_info = price_info::get_price_info_from_price_info_object(price_info_object);
+  let price_id = price_identifier::get_bytes(&price_info::get_price_identifier(&price_info));
+
+  assert!(price_id != x"29bdd5248234e33bd93d3b81100b5fa32eaa5997843847e2c2cb16d7c6d9f7ff", EInvalidID);
+
+  let decimal_i64 = price::get_expo(&price_struct);
+
+  decimal_i64.get_magnitude_if_positive()
 }
