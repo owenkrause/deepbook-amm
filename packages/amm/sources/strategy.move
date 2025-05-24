@@ -2,6 +2,7 @@ module deepbookamm::strategy;
 
 use std::u64::min;
 use sui::clock::Clock;
+use sui::event;
 use deepbook::pool::{Pool, mid_price, place_limit_order, pool_book_params};
 use deepbook::balance_manager::{BalanceManager, TradeProof, balance};
 use deepbook::order_info::{OrderInfo};
@@ -12,6 +13,20 @@ const EInvalidSpread: u64 = 4;
 const EExpiredTimestamp: u64 = 5;
 const EInsufficientBaseAsset: u64 = 6;
 const EInsufficientQuoteAsset: u64 = 7;
+
+/// Event emitted when an order is created
+public struct OrderCreatedEvent has copy, drop {
+  user: address,
+  spread_bps: u64,
+  mid_price: u64,
+  bid_price: u64,
+  ask_price: u64,
+  bid_quantity: u64,
+  ask_quantity: u64,
+  order_size: u64,
+  created_at: u64,
+  expires_at: u64
+}
 
 /// Places a spread order
 public fun create_spread_order<BaseAsset, QuoteAsset>(
@@ -103,6 +118,19 @@ public fun create_spread_order<BaseAsset, QuoteAsset>(
     clock,
     ctx
   );
+
+  event::emit(OrderCreatedEvent {
+    user: ctx.sender(),
+    spread_bps,
+    mid_price,
+    bid_price,
+    ask_price,
+    bid_quantity: bid_adjustment,
+    ask_quantity: ask_adjustment,
+    order_size,
+    created_at: clock.timestamp_ms(),
+    expires_at: expire_timestamp,
+  });
 
   (bid_order, ask_order)
 }
