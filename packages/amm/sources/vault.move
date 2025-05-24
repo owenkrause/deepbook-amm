@@ -4,25 +4,21 @@ use sui::clock::Clock;
 use sui::coin::{Coin, TreasuryCap};
 use sui::event;
 use sui::math::pow;
+use sui::vec_map::{VecMap, Self};
 use sui::sui::SUI;
 use usdc::usdc::USDC;
 use token::deep::DEEP;
 use deepbook::balance_manager;
 use pyth::{pyth, price_info, price_identifier, price};
 use pyth::price_info::PriceInfoObject;
-use deepbook::balance_manager::TradeCap;
+use deepbook::balance_manager::{TradeCap, DepositCap, WithdrawCap};
 
 // === Errors ===
 const EInvalidID: u64 = 0;
 const EWithdrawAmountTooLarge: u64 = 1;
 const EMintAmountTooLarge: u64 = 2;
-
-/// A shared object that holds funds used by the market maker
-public struct Vault<phantom P> has key, store {
-  id: UID,
-  lp_treasury_cap: TreasuryCap<P>,
-  balance_manager: balance_manager::BalanceManager,
-}
+const EUserNotRegistered: u64 = 3;
+const EInvalidExponent: u64 = 4;
 
 /// Event emitted when a deposit or withdrawal occurs
 public struct BalanceEvent has copy, drop {
@@ -33,15 +29,62 @@ public struct BalanceEvent has copy, drop {
   deposit: bool
 }
 
+/// Event emitted when a user registers their BalanceManager
+public struct RegistrationEvent has copy, drop {
+  vault: ID,
+  user: address,
+}
+
+/// Wrapper for user's BalanceManager with capabilities
+public struct UserBalanceManager has store {
+  balance_manager: balance_manager::BalanceManager,
+  trade_cap: TradeCap,
+  deposit_cap: DepositCap,
+  withdraw_cap: WithdrawCap
+}
+
+/// A shared object that holds funds used by the market maker
+public struct Vault<phantom P> has key, store {
+  id: UID,
+  lp_treasury_cap: TreasuryCap<P>,
+  user_balance_managers: VecMap<address, UserBalanceManager>,
+}
+
 /// Initializes and shares vault object
 public fun create_vault<T>(lp_treasury_cap: TreasuryCap<T>, ctx: &mut TxContext) {
   let vault = Vault<T> {
     id: object::new(ctx),
     lp_treasury_cap: lp_treasury_cap,
-    balance_manager: balance_manager::new(ctx),
+    user_balance_managers: vec_map::empty()
   };
 
   sui::transfer::share_object(vault);
+}
+
+/// Register user's BalanceManager with the vault
+public fun take_bm<T>(
+  vault: &mut Vault<T>,
+  balance_manager: balance_manager::BalanceManager,
+  trade_cap: TradeCap,
+  deposit_cap: DepositCap,
+  withdraw_cap: WithdrawCap,
+  ctx: &mut TxContext,
+) {
+  let user = ctx.sender();
+  
+  let user_bm = UserBalanceManager {
+    balance_manager,
+    trade_cap,
+    deposit_cap,
+    withdraw_cap
+  };
+  
+  vault.user_balance_managers.insert(user, user_bm);
+  
+  event::emit(RegistrationEvent {
+    vault: object::id(vault),
+    user: user,
+  });
 }
 
 /// Deposit into vault
@@ -57,7 +100,10 @@ public fun deposit<T>(
   let user = ctx.sender();
   let deposit_amount = coin.value();
 
-  vault.balance_manager.deposit(coin, ctx);  
+  assert!(vault.user_balance_managers.contains(&user), EUserNotRegistered);
+
+  let user_bm = vault.user_balance_managers.get_mut(&user);
+  user_bm.balance_manager.deposit_with_cap(&user_bm.deposit_cap, coin, ctx);  
 
   let total_vault_value = get_total_value(
     vault, 
@@ -97,7 +143,9 @@ public fun withdraw<T>(
 ): Coin<DEEP> {
   let user = ctx.sender();
   let lp_amount = lp_coin.value();
-  
+
+  assert!(vault.user_balance_managers.contains(&user), EUserNotRegistered);
+
   let total_vault_value = get_total_value(
     vault, 
     sui_price_info_object, 
@@ -113,8 +161,8 @@ public fun withdraw<T>(
 
   assert!(deep_to_withdraw <= (0xFFFFFFFFFFFFFFFF as u256), EWithdrawAmountTooLarge);
 
-  let deep_coin = vault.balance_manager.withdraw<DEEP>(deep_to_withdraw as u64, ctx);
-
+  let user_bm = vault.user_balance_managers.get_mut(&user);
+  let deep_coin = user_bm.balance_manager.withdraw_with_cap<DEEP>(&user_bm.withdraw_cap, deep_to_withdraw as u64, ctx);
   vault.lp_treasury_cap.burn(lp_coin);
 
   event::emit(BalanceEvent {
@@ -129,8 +177,22 @@ public fun withdraw<T>(
 }
 
 /// Get the balance manager of the vault
-public fun get_balance_manager<T>(vault: &mut Vault<T>): &mut balance_manager::BalanceManager {
-  &mut vault.balance_manager
+public fun get_user_balance_manager<T>(vault: &mut Vault<T>, user: address): &mut balance_manager::BalanceManager {
+  assert!(vault.user_balance_managers.contains(&user), EUserNotRegistered);
+  let user_bm = vault.user_balance_managers.get_mut(&user);
+  &mut user_bm.balance_manager
+}
+
+/// Get the trade cap of a specific user
+public fun get_user_trade_cap<T>(vault: &mut Vault<T>, user: address): &mut TradeCap {
+  assert!(vault.user_balance_managers.contains(&user), EUserNotRegistered);
+  let user_bm = vault.user_balance_managers.get_mut(&user);
+  &mut user_bm.trade_cap
+}
+
+/// Check if user is registered
+public fun is_user_registered<T>(vault: &Vault<T>, user: address): bool {
+  vault.user_balance_managers.contains(&user)
 }
 
 /// Get total value of vault
@@ -146,9 +208,20 @@ fun get_total_value<T>(
   let deep_price = get_deep_price(deep_price_info_object, clock);
 
   let mut total_value: u256 = 0;
-  total_value = total_value + (vault.balance_manager.balance<USDC>() as u256) * usdc_price;
-  total_value = total_value + (vault.balance_manager.balance<SUI>() as u256) * sui_price;
-  total_value = total_value + (vault.balance_manager.balance<DEEP>() as u256) * deep_price;
+
+  let mut i = 0;
+  let user_addresses = vault.user_balance_managers.keys();
+  let length = user_addresses.length();
+  while (i < length) {
+    let user_addr = user_addresses[i];
+    let user_bm = vault.user_balance_managers.get(&user_addr);
+
+    total_value = total_value + (user_bm.balance_manager.balance<USDC>() as u256) * usdc_price;
+    total_value = total_value + (user_bm.balance_manager.balance<SUI>() as u256) * sui_price;
+    total_value = total_value + (user_bm.balance_manager.balance<DEEP>() as u256) * deep_price;
+
+    i = i + 1;
+  };
 
   total_value
 }
@@ -165,7 +238,19 @@ fun get_usdc_price(price_info_object: &PriceInfoObject, clock: &Clock): u256 {
   let price = price::get_price(&price_struct);
   let expo = price::get_expo(&price_struct);
 
-  (price.get_magnitude_if_positive() as u256) * (pow(10, 18 - (expo.get_magnitude_if_positive() as u8)) as u256)
+  let price_magnitude = if (price.get_is_negative()) {
+    price.get_magnitude_if_negative()
+  } else {
+    price.get_magnitude_if_positive()
+  };
+
+  let expo_magnitude = if (expo.get_is_negative()) {
+    expo.get_magnitude_if_negative()
+  } else {
+    expo.get_magnitude_if_positive()
+  };
+
+  calculate_price_with_expo(price_magnitude, expo_magnitude, expo.get_is_negative())
 }
 
 /// Get price of SUI
@@ -180,7 +265,19 @@ fun get_sui_price(price_info_object: &PriceInfoObject, clock: &Clock): u256 {
   let price = price::get_price(&price_struct);
   let expo = price::get_expo(&price_struct);
 
-  (price.get_magnitude_if_positive() as u256) * (pow(10, 18 - (expo.get_magnitude_if_positive() as u8)) as u256)
+  let price_magnitude = if (price.get_is_negative()) {
+    price.get_magnitude_if_negative()
+  } else {
+    price.get_magnitude_if_positive()
+  };
+
+  let expo_magnitude = if (expo.get_is_negative()) {
+    expo.get_magnitude_if_negative()
+  } else {
+    expo.get_magnitude_if_positive()
+  };
+
+  calculate_price_with_expo(price_magnitude, expo_magnitude, expo.get_is_negative())
 }
 
 /// Get price of DEEP
@@ -195,5 +292,37 @@ fun get_deep_price(price_info_object: &PriceInfoObject, clock: &Clock): u256 {
   let price = price::get_price(&price_struct);
   let expo = price::get_expo(&price_struct);
 
-  (price.get_magnitude_if_positive() as u256) * (pow(10, 18 - (expo.get_magnitude_if_positive() as u8)) as u256)
+  let price_magnitude = if (price.get_is_negative()) {
+    price.get_magnitude_if_negative()
+  } else {
+    price.get_magnitude_if_positive()
+  };
+
+  let expo_magnitude = if (expo.get_is_negative()) {
+    expo.get_magnitude_if_negative()
+  } else {
+    expo.get_magnitude_if_positive()
+  };
+
+  calculate_price_with_expo(price_magnitude, expo_magnitude, expo.get_is_negative())
+}
+
+fun calculate_price_with_expo(price_magnitude: u64, expo_magnitude: u64, expo_is_negative: bool): u256 {
+  let price_u256 = price_magnitude as u256;
+  
+  if (expo_is_negative) {
+    if (expo_magnitude > 18) {
+      let divisor_exponent = (expo_magnitude as u64) - 18;
+      assert!(divisor_exponent <= 77, EInvalidExponent);
+      price_u256 / (pow(10, (divisor_exponent as u8)) as u256)
+    } else {
+      let multiplier_exponent = 18 - (expo_magnitude as u64);
+      price_u256 * (pow(10, (multiplier_exponent as u8)) as u256)
+    }
+  } else {
+    let total_exponent = 18 + (expo_magnitude as u64);
+    assert!(total_exponent <= 77, EInvalidExponent);
+    
+    price_u256 * (pow(10, (total_exponent as u8)) as u256)
+  }
 }

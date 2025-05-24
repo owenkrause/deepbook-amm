@@ -43,9 +43,11 @@ export default function Home() {
   const currentAccount = useCurrentAccount();
   const { mutate: disconnect } = useDisconnectWallet();
 	const [open, setOpen] = useState(false);
+  const [isRegistered, setIsRegistered] = useState(false);
+  const [isCheckingRegistration, setIsCheckingRegistration] = useState(false);
 
   const deep_balance = useUserBalance("0xdeeb7a4662eec9f2f3def03fb937a663dddaa2e215b8078a284d026b7946c270::deep::DEEP");
-  const lp_balance = useUserBalance("0xfd5b64c8eecfa210ba12a786477c7daedf95aa9cc155fc46493ecaf13a1d11f2::drip::DRIP");
+  const lp_balance = useUserBalance("0x76a8ea947c1211c26e84f535140e50c9c58e6ae0813ee2b44b8339a7f9b0172f::drip::DRIP");
 
   const [priceInfoObjectIds, setPriceInfoObjectIds] = useState<string[]>([]);
 
@@ -76,8 +78,44 @@ export default function Home() {
 
     fetchPriceInfo();
   }, []);
-  
 
+  useEffect(() => {
+    const checkRegistration = async () => {
+      if (!currentAccount || !packageID || !vaultID) {
+        setIsRegistered(false);
+        return;
+      }
+
+      setIsCheckingRegistration(true);
+      try {
+        const result = await client.getObject({
+          id: vaultID,
+          options: {
+            showContent: true,
+          },
+        });
+
+        if (result.data?.content?.dataType === "moveObject") {
+          const vaultData = result.data.content.fields as any;
+          const userBalanceManagers = vaultData.user_balance_managers?.fields?.contents || [];
+          
+          const userRegistered = userBalanceManagers.some((entry: any) => 
+            entry.fields.key === currentAccount.address
+          );
+          
+          setIsRegistered(userRegistered);
+        }
+      } catch (error) {
+        console.error("Error checking registration:", error);
+        setIsRegistered(false);
+      } finally {
+        setIsCheckingRegistration(false);
+      }
+    };
+
+    checkRegistration();
+  }, [currentAccount, client, packageID, vaultID]);
+  
   const orders = useOrders(packageID);
 
   const form = useForm<z.infer<typeof formSchema>>({
@@ -96,6 +134,54 @@ export default function Home() {
     }
   }
 
+  function handleRegister() {
+    if (!currentAccount) return;
+
+    const tx = new Transaction();
+
+    const balanceManager = tx.moveCall({
+      target: `0xcaf6ba059d539a97646d47f0b9ddf843e138d215e2a12ca1f4585d386f7aec3a::balance_manager::new`,
+      arguments: []
+    });
+
+    const tradeCap = tx.moveCall({
+      target: `0xcaf6ba059d539a97646d47f0b9ddf843e138d215e2a12ca1f4585d386f7aec3a::balance_manager::mint_trade_cap`,
+      arguments: [balanceManager]
+    });
+
+    const depositCap = tx.moveCall({
+      target: `0xcaf6ba059d539a97646d47f0b9ddf843e138d215e2a12ca1f4585d386f7aec3a::balance_manager::mint_deposit_cap`,
+      arguments: [balanceManager]
+    });
+
+    const withdrawCap = tx.moveCall({
+      target: `0xcaf6ba059d539a97646d47f0b9ddf843e138d215e2a12ca1f4585d386f7aec3a::balance_manager::mint_withdraw_cap`,
+      arguments: [balanceManager]
+    });
+
+    tx.moveCall({
+      target: `${packageID}::mm_vault::take_bm`,
+      typeArguments: ["0x76a8ea947c1211c26e84f535140e50c9c58e6ae0813ee2b44b8339a7f9b0172f::drip::DRIP"],
+      arguments: [
+        tx.object(vaultID!),
+        balanceManager,
+        tradeCap,
+        depositCap,
+        withdrawCap
+      ]
+    });
+
+    signAndExecute({ transaction: tx }, {
+      onSuccess: (result) => {
+        console.log("Registration successful: ", result);
+        setIsRegistered(true);
+      },
+      onError: (error) => {
+        console.error("Registration failed: ", error);
+      },
+    });
+  }
+
   function handleDeposit(amount: number) {
     if (!currentAccount) return
 
@@ -106,29 +192,23 @@ export default function Home() {
 
     const tx = new Transaction();
 
+    tx.setSenderIfNotSet(currentAccount.address);
 
-    const trade_cap = tx.moveCall({
-      target: `${packageID}::mm_vault::mint_withdraw_cap`,
-      typeArguments: ["0xfd5b64c8eecfa210ba12a786477c7daedf95aa9cc155fc46493ecaf13a1d11f2::drip::DRIP"],
-      arguments: [tx.object(vaultID!)]
+    const lpTokens = tx.moveCall({
+      target: `${packageID}::mm_vault::deposit`,
+      typeArguments: ["0x76a8ea947c1211c26e84f535140e50c9c58e6ae0813ee2b44b8339a7f9b0172f::drip::DRIP"],
+      arguments: [
+        tx.object(vaultID!),
+        tx.object(deposit),
+        tx.object(priceInfoObjectIds[0]),
+        tx.object(priceInfoObjectIds[1]),
+        tx.object(priceInfoObjectIds[2]),
+        tx.object("0x6")
+      ]
     })
 
-    // const lpTokens = tx.moveCall({
-    //   target: `${packageID}::mm_vault::deposit`,
-    //   typeArguments: ["0xfd5b64c8eecfa210ba12a786477c7daedf95aa9cc155fc46493ecaf13a1d11f2::drip::DRIP"],
-    //   arguments: [
-    //     tx.object(vaultID!),
-    //     tx.object(deposit),
-    //     tx.object(priceInfoObjectIds[0]),
-    //     tx.object(priceInfoObjectIds[1]),
-    //     tx.object(priceInfoObjectIds[2]),
-    //     tx.object("0x6")
-    //   ]
-    // })
+    tx.transferObjects([lpTokens], currentAccount.address);
 
-    // tx.transferObjects([lpTokens], currentAccount.address);
-
-    console.log(trade_cap)
     signAndExecute({ transaction: tx }, {
       onSuccess: (result) => {
         console.log("Deposit successful: ", result);
@@ -140,7 +220,41 @@ export default function Home() {
   }
 
   function handleWithdraw(amount: number) {
+    if (!currentAccount || !isRegistered) return;
 
+    const lpCoin = coinWithBalance({ 
+      type: "0x76a8ea947c1211c26e84f535140e50c9c58e6ae0813ee2b44b8339a7f9b0172f::drip::DRIP",
+      balance: amount * 1_000_000_000
+    });
+
+    const tx = new Transaction();
+
+    tx.setSenderIfNotSet(currentAccount.address);
+
+    const deepTokens = tx.moveCall({
+      target: `${packageID}::mm_vault::withdraw`,
+      typeArguments: ["0x76a8ea947c1211c26e84f535140e50c9c58e6ae0813ee2b44b8339a7f9b0172f::drip::DRIP"],
+      arguments: [
+        tx.object(vaultID!),
+        tx.object(lpCoin),
+        tx.object(priceInfoObjectIds[0]),
+        tx.object(priceInfoObjectIds[1]),
+        tx.object(priceInfoObjectIds[2]),
+        tx.object("0x6")
+      ]
+    });
+
+    tx.transferObjects([deepTokens], currentAccount.address);
+
+    signAndExecute({ transaction: tx }, {
+      onSuccess: (result) => {
+        console.log("Withdraw successful: ", result);
+        form.reset();
+      },
+      onError: (error) => {
+        console.error("Withdraw failed: ", error);
+      },
+    });
   }
 
   const transferType = form.watch("type");
@@ -181,6 +295,19 @@ export default function Home() {
             <div>VAULT</div>
             <div>TVL: $1,303,245</div>
           </div>
+          {currentAccount && (
+            <div className="flex justify-between items-center p-2 bg-accent rounded-md">
+              <div>
+                Registration Status: {isCheckingRegistration ? "Checking..." : (isRegistered ? "✅ Registered" : "❌ Not Registered")}
+              </div>
+              {!isRegistered && !isCheckingRegistration && (
+                <Button onClick={handleRegister} size="sm">
+                  Register BalanceManager
+                </Button>
+              )}
+            </div>
+          )}
+
           <div className="flex w-full gap-4 pt-3">
             <div className="w-1/2 bg-accent rounded-md p-2">
               <Tabs 
@@ -210,13 +337,27 @@ export default function Home() {
                           render={({ field }) => (
                             <FormItem className="w-full">
                               <FormControl>
-                                <Input {...field}></Input>
+                                <Input 
+                                  {...field}
+                                  disabled={!isRegistered || !currentAccount || priceInfoObjectIds.length === 0}
+                                />
                               </FormControl>
+                              <FormMessage />
                             </FormItem>
                           )}
                         />
-                        <Button type="submit">{transferType === "deposit" ? "Deposit" : "Withdraw"}</Button>
+                        <Button 
+                          type="submit"
+                          disabled={!isRegistered || !currentAccount || priceInfoObjectIds.length === 0}
+                        >
+                          {transferType === "deposit" ? "Deposit" : "Withdraw"}
+                        </Button>
                       </div>
+                      {priceInfoObjectIds.length === 0 && (
+                        <div className="text-sm text-muted-foreground mt-2">
+                          Loading price feeds...
+                        </div>
+                      )}
                     </form>
                   </Form>
                 </TabsContent>
@@ -232,9 +373,9 @@ export default function Home() {
           <div className="w-full rounded-md bg-accent p-2 h-[200px]">
             <div>Trade Log</div>
             <div>
-              {orders.data && orders.data.data.map(order => {
+              {orders.data && orders.data.data.map((order, index) => {
                 console.log(order)
-                return <div>order</div>
+                return <div key={index}>order</div>
               })}
             </div>
           </div>
