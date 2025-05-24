@@ -1,18 +1,149 @@
 "use client"
 
-import { useState } from "react";
-import { ConnectModal, useCurrentAccount, useDisconnectWallet } from "@mysten/dapp-kit";
+import { useEffect, useState } from "react";
+import { ConnectModal, useCurrentAccount, useDisconnectWallet, useSuiClient, useSignAndExecuteTransaction } from "@mysten/dapp-kit";
+import { SuiPriceServiceConnection, SuiPythClient } from "@pythnetwork/pyth-sui-js";
+import { z } from "zod";
+import { zodResolver } from "@hookform/resolvers/zod"
+import { useForm } from "react-hook-form"
 import { Asset } from "@/components/asset";
+import { useUserBalance } from "@/hooks/useUserBalance";
+import { useOrders } from "@/hooks/useOrders";
+
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
+import { Button } from "@/components/ui/button"
+import {
+  Form,
+  FormControl,
+  FormDescription,
+  FormField,
+  FormItem,
+  FormLabel,
+  FormMessage,
+} from "@/components/ui/form"
+import { Input } from "@/components/ui/input"
+import { Transaction, coinWithBalance } from "@mysten/sui/transactions";
+
+
+const formSchema = z.object({
+  type: z.enum(["deposit", "withdraw"]),
+  amount: z.coerce
+    .number()
+    .positive("Amount must be greater than zero."),
+})
 
 export default function Home() {
-  const packageId = process.env.NEXT_PUBLIC_PACKAGE_ID;
-  const vaultId = process.env.NEXT_PUBLIC_VAULT_ID;
+  const packageID = process.env.NEXT_PUBLIC_PACKAGE_ID;
+  const vaultID = process.env.NEXT_PUBLIC_VAULT_ID;
 
-  if (!packageId || !vaultId) return console.error("Environmental variables setup incorrectly");
+  if (!packageID || !vaultID) return console.error("Environmental variables setup incorrectly");
 
+  const client = useSuiClient();
+  const { mutate: signAndExecute } = useSignAndExecuteTransaction();
   const currentAccount = useCurrentAccount();
   const { mutate: disconnect } = useDisconnectWallet();
 	const [open, setOpen] = useState(false);
+
+  const deep_balance = useUserBalance("0xdeeb7a4662eec9f2f3def03fb937a663dddaa2e215b8078a284d026b7946c270::deep::DEEP");
+  const lp_balance = useUserBalance("0xfd5b64c8eecfa210ba12a786477c7daedf95aa9cc155fc46493ecaf13a1d11f2::drip::DRIP");
+
+  const [priceInfoObjectIds, setPriceInfoObjectIds] = useState<string[]>([]);
+
+  useEffect(() => {
+    const fetchPriceInfo = async () => {
+      try {
+        const connection = new SuiPriceServiceConnection("https://hermes.pyth.network");
+        const priceIDs = [
+          "0x23d7315113f5b1d3ba7a83604c44b94d79f4fd69af77f804fc7f920a6dc65744", // SUI / USD
+          "0x29bdd5248234e33bd93d3b81100b5fa32eaa5997843847e2c2cb16d7c6d9f7ff", // DEEP / USD
+          "0xeaa020c61cc479712813461ce153894a96a6c00b21ed0cfc2798d1f9a9e9c94a", // USDC / USD
+        ];
+
+        const priceFeedUpdateData = await connection.getPriceFeedsUpdateData(priceIDs);
+        
+        const wormholeStateId = "0xaeab97f96cf9877fee2883315d459552b2b921edc16d7ceac6eab944dd88919c";
+        const pythStateId = "0x1f9310238ee9298fb703c3419030b35b22bb1cc37113e3bb5007c99aec79e5b8";
+        
+        const pythClient = new SuiPythClient(client, pythStateId, wormholeStateId);
+        const tx = new Transaction();
+        
+        const objectIds = await pythClient.updatePriceFeeds(tx, priceFeedUpdateData, priceIDs);
+        setPriceInfoObjectIds(objectIds);
+      } catch (error) {
+        console.error("Error fetching price info:", error);
+      }
+    };
+
+    fetchPriceInfo();
+  }, []);
+  
+
+  const orders = useOrders(packageID);
+
+  const form = useForm<z.infer<typeof formSchema>>({
+    resolver: zodResolver(formSchema),
+    defaultValues: {
+      type: "deposit",
+      amount: 0.0
+    },
+  })
+
+  function onSubmit(values: z.infer<typeof formSchema>) {
+    if (values.type === "deposit") {
+      handleDeposit(values.amount);
+    } else {
+      handleWithdraw(values.amount);
+    }
+  }
+
+  function handleDeposit(amount: number) {
+    if (!currentAccount) return
+
+    const deposit = coinWithBalance({ 
+      type: "0xdeeb7a4662eec9f2f3def03fb937a663dddaa2e215b8078a284d026b7946c270::deep::DEEP",
+      balance: amount * 1_000_000
+    })
+
+    const tx = new Transaction();
+
+
+    const trade_cap = tx.moveCall({
+      target: `${packageID}::mm_vault::mint_withdraw_cap`,
+      typeArguments: ["0xfd5b64c8eecfa210ba12a786477c7daedf95aa9cc155fc46493ecaf13a1d11f2::drip::DRIP"],
+      arguments: [tx.object(vaultID!)]
+    })
+
+    // const lpTokens = tx.moveCall({
+    //   target: `${packageID}::mm_vault::deposit`,
+    //   typeArguments: ["0xfd5b64c8eecfa210ba12a786477c7daedf95aa9cc155fc46493ecaf13a1d11f2::drip::DRIP"],
+    //   arguments: [
+    //     tx.object(vaultID!),
+    //     tx.object(deposit),
+    //     tx.object(priceInfoObjectIds[0]),
+    //     tx.object(priceInfoObjectIds[1]),
+    //     tx.object(priceInfoObjectIds[2]),
+    //     tx.object("0x6")
+    //   ]
+    // })
+
+    // tx.transferObjects([lpTokens], currentAccount.address);
+
+    console.log(trade_cap)
+    signAndExecute({ transaction: tx }, {
+      onSuccess: (result) => {
+        console.log("Deposit successful: ", result);
+      },
+      onError: (error) => {
+        console.error("Deposit failed: ", error);
+      },
+    });
+  }
+
+  function handleWithdraw(amount: number) {
+
+  }
+
+  const transferType = form.watch("type");
 
   return (
     <div className="w-screen h-screen flex justify-center p-16">
@@ -35,8 +166,8 @@ export default function Home() {
             />
           )}
         </div>
-        <div className="w-full flex justify-center">
-          <pre className="pt-4 text-green-500">
+        <div className="flex justify-center">
+          <pre className="pt-4 pb-8 text-green-500">
             {
               String.raw`   ___  ___________  ___  ____  ____  __ __    ___   __  _____  ___` + "\n" + 
               String.raw`  / _ \/ __/ __/ _ \/ _ )/ __ \/ __ \/ //_/   / _ | /  |/  /  |/  /` + "\n" + 
@@ -45,8 +176,68 @@ export default function Home() {
             }
         </pre>
         </div>
-        <div>
-          <Asset vaultId={vaultId} asset={"SUI"}/>
+        <div className="flex flex-col mx-8 border rounded-md p-4 gap-4 bg-primary-foreground">
+          <div className="flex justify-between pb-2 border-b">
+            <div>VAULT</div>
+            <div>TVL: $1,303,245</div>
+          </div>
+          <div className="flex w-full gap-4 pt-3">
+            <div className="w-1/2 bg-accent rounded-md p-2">
+              <Tabs 
+                value={transferType}
+                onValueChange={(value) => {
+                  form.setValue("type", value as "deposit" || "withdraw");
+                  form.clearErrors();
+                }}
+              >
+                <TabsList className="w-full">
+                  <TabsTrigger value="deposit">Deposit</TabsTrigger>
+                  <TabsTrigger value="withdraw">Withdraw</TabsTrigger>
+                </TabsList>
+                <TabsContent value={transferType}>
+                  <div>
+                    {transferType === "deposit" ? "DEEP Balance: " : "DRIP Balance: "}
+                    {!deep_balance.data || !lp_balance.data ? "--" : (
+                      transferType === "deposit" ? Number(deep_balance.data.totalBalance) / 1_000_000 : Number(lp_balance.data.totalBalance) / 1_000_000
+                    )}
+                  </div>
+                  <Form {...form}>
+                    <form onSubmit={form.handleSubmit(onSubmit)}>
+                      <div className="flex w-full gap-2">
+                        <FormField
+                          control={form.control}
+                          name="amount"
+                          render={({ field }) => (
+                            <FormItem className="w-full">
+                              <FormControl>
+                                <Input {...field}></Input>
+                              </FormControl>
+                            </FormItem>
+                          )}
+                        />
+                        <Button type="submit">{transferType === "deposit" ? "Deposit" : "Withdraw"}</Button>
+                      </div>
+                    </form>
+                  </Form>
+                </TabsContent>
+              </Tabs>
+            </div>
+            <div className="w-1/2 bg-accent rounded-md p-2">
+              <div>Asset Balances</div>
+              <Asset packageID={packageID} vaultID={vaultID} coinType={"0x2::sui::SUI"}/>
+              <Asset packageID={packageID} vaultID={vaultID} coinType={"0xdeeb7a4662eec9f2f3def03fb937a663dddaa2e215b8078a284d026b7946c270::deep::DEEP"}/>
+              <Asset packageID={packageID} vaultID={vaultID} coinType={"0xdba34672e30cb065b1f93e3ab55318768fd6fef66c15942c9f7cb846e2f900e7::usdc::USDC"}/>
+            </div>
+          </div>
+          <div className="w-full rounded-md bg-accent p-2 h-[200px]">
+            <div>Trade Log</div>
+            <div>
+              {orders.data && orders.data.data.map(order => {
+                console.log(order)
+                return <div>order</div>
+              })}
+            </div>
+          </div>
         </div>
       </div>
     </div>

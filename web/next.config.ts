@@ -1,7 +1,10 @@
 import type { NextConfig } from "next";
 
 const nextConfig: NextConfig = {
-  /* config options here */
+  images: {
+    domains: ["circle.com", "images.deepbook.tech"],
+    dangerouslyAllowSVG: true
+  }
 };
 
 export default nextConfig;

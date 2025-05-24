@@ -1,35 +1,33 @@
-import { useSuiClientQuery } from "@mysten/dapp-kit";
-import { Transaction } from "@mysten/sui/transactions";
+import Image from "next/image";
+import { useVaultBalance } from "@/hooks/useVaultBalance";
+import { useCoinMetadata } from "@/hooks/useCoinMetadata";
 
-export function Asset(props: { vaultId: string, asset: string }) {
-  const { vaultId, asset } = props;
+export function Asset(props: { packageID: string, vaultID: string, coinType: string }) {
+  const { packageID, vaultID, coinType } = props;
 
-  const { data: vault } = useSuiClientQuery("getObject", { 
-    id: vaultId,
-    options: { showContent: true },
-  })
+  const balanceData = useVaultBalance(packageID, vaultID, coinType);
+  const coinMetadata = useCoinMetadata(coinType);
 
-  const balanceManagerId = vault?.data?.content?.fields?.balance_manager?.fields?.id?.id;
-  
-  if (!balanceManagerId) return;
+  if (!coinMetadata) return;
+  if (!balanceData?.results?.[0]?.returnValues?.[0]) return;
 
-  console.log(balanceManagerId)
-
-  let tx = new Transaction()
-
-  tx.moveCall({
-    target: "::balance_manager::balance",
-    typeArguments: ["0x2::sui::SUI"],
-    arguments: [tx.object(balanceManagerId)]
-  })
-
-  //const { d } = useSuiClientQuery("devInspectTransactionBlock", tx);
-
-  //console.log("vault: ", d);
+  const [bytes] = balanceData.results[0].returnValues[0];
+  const buffer = new Uint8Array(bytes);
+  const view = new DataView(buffer.buffer);
+  const balance = view.getBigUint64(0, true);
 
   return (
-    <div>
-      
+    <div className="flex items-center justify-between p-2">
+      <div className="flex gap-2">
+        <Image 
+          src={coinMetadata.iconUrl}
+          alt="Coin icon"
+          width={24}
+          height={24}
+        />
+        <div>{coinMetadata.symbol}</div>
+      </div>
+      <div>{balance.toString()}</div>
     </div>
   );
 }
