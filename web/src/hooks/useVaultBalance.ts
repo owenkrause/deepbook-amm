@@ -8,7 +8,7 @@ export function useVaultBalance(packageID: string, vaultID: string, coinType: st
   tx.moveCall({
     target: `${packageID}::mm_vault::get_balance`,
     typeArguments: [
-      `0xfd5b64c8eecfa210ba12a786477c7daedf95aa9cc155fc46493ecaf13a1d11f2::drip::DRIP`,
+      `0xd6cba7469263e9eb6e59a21a724274c70424127dc058c2fc2ba154196d827f82::drip::DRIP`,
       coinType
     ],
     arguments: [tx.object(vaultID)]
