@@ -202,6 +202,26 @@ public fun is_user_registered<T>(vault: &Vault<T>, user: address): bool {
   vault.user_balance_managers.contains(&user)
 }
 
+/// Get total balance of a specific coin type in the vault
+public fun get_vault_balance<T, P>(vault: &Vault<T>): u64 {
+  let mut total_balance: u64 = 0;
+  
+  let mut i = 0;
+  let user_addresses = vault.user_balance_managers.keys();
+  let length = user_addresses.length();
+  
+  while (i < length) {
+    let user_addr = user_addresses[i];
+    let user_bm = vault.user_balance_managers.get(&user_addr);
+    
+    total_balance = total_balance + user_bm.balance_manager.balance<P>();
+    
+    i = i + 1;
+  };
+  
+  total_balance
+}
+
 /// Get total value of vault
 public fun get_total_value<T>(
   vault: &Vault<T>, 
