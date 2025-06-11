@@ -2,10 +2,8 @@ import Image from "next/image";
 import { useVaultBalance } from "@/hooks/useVaultBalance";
 import { useCoinMetadata } from "@/hooks/useCoinMetadata";
 
-export function Asset(props: { packageID: string, vaultID: string, coinType: string }) {
-  const { packageID, vaultID, coinType } = props;
-
-  const balanceData = useVaultBalance(packageID, vaultID, coinType);
+export function Asset({ packageId, vaultId, coinType } : { packageId: string, vaultId: string, coinType: string } ) {
+  const balanceData = useVaultBalance(packageId, vaultId, coinType);
   const coinMetadata = useCoinMetadata(coinType);
 
   if (!coinMetadata) return;
