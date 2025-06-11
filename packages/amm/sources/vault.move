@@ -9,7 +9,7 @@ use sui::sui::SUI;
 use usdc::usdc::USDC;
 use token::deep::DEEP;
 use deepbook::balance_manager;
-use pyth::{pyth, price_info, price_identifier, price};
+use pyth::{pyth, price_info, price_identifier, price, i64};
 use pyth::price_info::PriceInfoObject;
 use deepbook::balance_manager::{TradeCap, DepositCap, WithdrawCap};
 
@@ -18,7 +18,8 @@ const EInvalidID: u64 = 0;
 const EWithdrawAmountTooLarge: u64 = 1;
 const EMintAmountTooLarge: u64 = 2;
 const EUserNotRegistered: u64 = 3;
-const EInvalidExponent: u64 = 4;
+
+const STANRDARD_EXPO_MAGNITUDE: u64 = 8;
 
 /// Event emitted when a deposit or withdrawal occurs
 public struct BalanceEvent has copy, drop {
@@ -99,22 +100,28 @@ public fun deposit<T>(
 ): Coin<T> {
   let user = ctx.sender();
   let deposit_amount = coin.value();
+  
+  let deep_price = get_deep_price(deep_price_info_object, clock);
+  let deposit_value = deposit_amount * deep_price;
 
   assert!(vault.user_balance_managers.contains(&user), EUserNotRegistered);
 
   let user_bm = vault.user_balance_managers.get_mut(&user);
   user_bm.balance_manager.deposit_with_cap(&user_bm.deposit_cap, coin, ctx);  
 
-  let total_vault_value = get_total_value(
-    vault, 
-    sui_price_info_object, 
-    deep_price_info_object, 
-    usdc_price_info_object, 
-    clock
-  );
-
   let total_lp_supply = vault.lp_treasury_cap.total_supply();
-  let lp_tokens_to_mint = (deposit_amount * total_lp_supply as u256) / total_vault_value;
+  let lp_tokens_to_mint = if (total_lp_supply == 0) {
+    deposit_value as u256
+  } else {
+    let (total_vault_value, _, _, _, _ ) = get_total_value(
+      vault, 
+      sui_price_info_object, 
+      deep_price_info_object, 
+      usdc_price_info_object, 
+      clock
+    );
+    (deposit_value * total_lp_supply as u256) / total_vault_value
+  };
 
   assert!(lp_tokens_to_mint <= (0xFFFFFFFFFFFFFFFF as u256), EMintAmountTooLarge);
 
@@ -146,7 +153,7 @@ public fun withdraw<T>(
 
   assert!(vault.user_balance_managers.contains(&user), EUserNotRegistered);
 
-  let total_vault_value = get_total_value(
+  let (total_vault_value, _, _, _, _ ) = get_total_value(
     vault, 
     sui_price_info_object, 
     deep_price_info_object, 
@@ -157,7 +164,7 @@ public fun withdraw<T>(
   let user_vault_share = (lp_amount as u256 * total_vault_value) / (total_lp_supply as u256);
 
   let deep_price = get_deep_price(deep_price_info_object, clock);
-  let deep_to_withdraw = user_vault_share / deep_price;
+  let deep_to_withdraw = user_vault_share / (deep_price as u256);
 
   assert!(deep_to_withdraw <= (0xFFFFFFFFFFFFFFFF as u256), EWithdrawAmountTooLarge);
 
@@ -196,18 +203,20 @@ public fun is_user_registered<T>(vault: &Vault<T>, user: address): bool {
 }
 
 /// Get total value of vault
-fun get_total_value<T>(
+public fun get_total_value<T>(
   vault: &Vault<T>, 
   sui_price_info_object: &PriceInfoObject, 
   deep_price_info_object: &PriceInfoObject,
   usdc_price_info_object: &PriceInfoObject,
   clock: &Clock,
-): u256 {
+): (u256, u256, u256, u256, u64) {
   let usdc_price = get_usdc_price(usdc_price_info_object, clock);
   let sui_price = get_sui_price(sui_price_info_object, clock);
   let deep_price = get_deep_price(deep_price_info_object, clock);
 
-  let mut total_value: u256 = 0;
+  let mut usdc_total_value: u256 = 0;
+  let mut sui_total_value: u256 = 0;
+  let mut deep_total_value: u256 = 0;
 
   let mut i = 0;
   let user_addresses = vault.user_balance_managers.keys();
@@ -216,18 +225,20 @@ fun get_total_value<T>(
     let user_addr = user_addresses[i];
     let user_bm = vault.user_balance_managers.get(&user_addr);
 
-    total_value = total_value + (user_bm.balance_manager.balance<USDC>() as u256) * usdc_price;
-    total_value = total_value + (user_bm.balance_manager.balance<SUI>() as u256) * sui_price;
-    total_value = total_value + (user_bm.balance_manager.balance<DEEP>() as u256) * deep_price;
+    usdc_total_value = usdc_total_value + (user_bm.balance_manager.balance<USDC>() as u256) * (usdc_price as u256);
+    sui_total_value = sui_total_value + (user_bm.balance_manager.balance<SUI>() as u256) * (sui_price as u256);
+    deep_total_value = deep_total_value + (user_bm.balance_manager.balance<DEEP>() as u256) * (deep_price as u256);
 
     i = i + 1;
   };
 
-  total_value
+  let total_value = usdc_total_value + sui_total_value + deep_total_value;
+
+  (total_value, usdc_total_value, sui_total_value, deep_total_value, STANRDARD_EXPO_MAGNITUDE)
 }
 
 /// Get price of USDC
-fun get_usdc_price(price_info_object: &PriceInfoObject, clock: &Clock): u256 {
+fun get_usdc_price(price_info_object: &PriceInfoObject, clock: &Clock): u64 {
   let max_age = 60;
   let price_struct = pyth::get_price_no_older_than(price_info_object, clock, max_age);
   let price_info = price_info::get_price_info_from_price_info_object(price_info_object);
@@ -238,23 +249,11 @@ fun get_usdc_price(price_info_object: &PriceInfoObject, clock: &Clock): u256 {
   let price = price::get_price(&price_struct);
   let expo = price::get_expo(&price_struct);
 
-  let price_magnitude = if (price.get_is_negative()) {
-    price.get_magnitude_if_negative()
-  } else {
-    price.get_magnitude_if_positive()
-  };
-
-  let expo_magnitude = if (expo.get_is_negative()) {
-    expo.get_magnitude_if_negative()
-  } else {
-    expo.get_magnitude_if_positive()
-  };
-
-  calculate_price_with_expo(price_magnitude, expo_magnitude, expo.get_is_negative())
+  normalize_price(&price, &expo)
 }
 
 /// Get price of SUI
-fun get_sui_price(price_info_object: &PriceInfoObject, clock: &Clock): u256 {
+fun get_sui_price(price_info_object: &PriceInfoObject, clock: &Clock): u64 {
   let max_age = 60;
   let price_struct = pyth::get_price_no_older_than(price_info_object, clock, max_age);
   let price_info = price_info::get_price_info_from_price_info_object(price_info_object);
@@ -265,23 +264,11 @@ fun get_sui_price(price_info_object: &PriceInfoObject, clock: &Clock): u256 {
   let price = price::get_price(&price_struct);
   let expo = price::get_expo(&price_struct);
 
-  let price_magnitude = if (price.get_is_negative()) {
-    price.get_magnitude_if_negative()
-  } else {
-    price.get_magnitude_if_positive()
-  };
-
-  let expo_magnitude = if (expo.get_is_negative()) {
-    expo.get_magnitude_if_negative()
-  } else {
-    expo.get_magnitude_if_positive()
-  };
-
-  calculate_price_with_expo(price_magnitude, expo_magnitude, expo.get_is_negative())
+  normalize_price(&price, &expo)
 }
 
 /// Get price of DEEP
-fun get_deep_price(price_info_object: &PriceInfoObject, clock: &Clock): u256 {
+fun get_deep_price(price_info_object: &PriceInfoObject, clock: &Clock): u64 {
   let max_age = 60;
   let price_struct = pyth::get_price_no_older_than(price_info_object, clock, max_age);
   let price_info = price_info::get_price_info_from_price_info_object(price_info_object);
@@ -292,37 +279,22 @@ fun get_deep_price(price_info_object: &PriceInfoObject, clock: &Clock): u256 {
   let price = price::get_price(&price_struct);
   let expo = price::get_expo(&price_struct);
 
-  let price_magnitude = if (price.get_is_negative()) {
-    price.get_magnitude_if_negative()
-  } else {
-    price.get_magnitude_if_positive()
-  };
-
-  let expo_magnitude = if (expo.get_is_negative()) {
-    expo.get_magnitude_if_negative()
-  } else {
-    expo.get_magnitude_if_positive()
-  };
-
-  calculate_price_with_expo(price_magnitude, expo_magnitude, expo.get_is_negative())
+  normalize_price(&price, &expo)
 }
 
-fun calculate_price_with_expo(price_magnitude: u64, expo_magnitude: u64, expo_is_negative: bool): u256 {
-  let price_u256 = price_magnitude as u256;
-  
-  if (expo_is_negative) {
-    if (expo_magnitude > 18) {
-      let divisor_exponent = (expo_magnitude as u64) - 18;
-      assert!(divisor_exponent <= 77, EInvalidExponent);
-      price_u256 / (pow(10, (divisor_exponent as u8)) as u256)
-    } else {
-      let multiplier_exponent = 18 - (expo_magnitude as u64);
-      price_u256 * (pow(10, (multiplier_exponent as u8)) as u256)
-    }
+/// Normalizes the price
+fun normalize_price(
+  price: &i64::I64,
+  expo: &i64::I64
+): u64 {
+  let price_magnitude = price.get_magnitude_if_positive();
+  let expo_magnitude = expo.get_magnitude_if_negative();
+
+  let normalized_price = if (expo_magnitude < STANRDARD_EXPO_MAGNITUDE) {
+    price_magnitude / pow(10,  (STANRDARD_EXPO_MAGNITUDE - expo_magnitude) as u8)
   } else {
-    let total_exponent = 18 + (expo_magnitude as u64);
-    assert!(total_exponent <= 77, EInvalidExponent);
-    
-    price_u256 * (pow(10, (total_exponent as u8)) as u256)
-  }
+    price_magnitude * pow(10,  (expo_magnitude - STANRDARD_EXPO_MAGNITUDE) as u8)
+  };
+
+  normalized_price
 }
