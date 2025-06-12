@@ -3,6 +3,7 @@ import { zodResolver } from "@hookform/resolvers/zod"
 import { useForm } from "react-hook-form"
 import { useCurrentAccount, useSignAndExecuteTransaction } from "@mysten/dapp-kit";
 import { Transaction, coinWithBalance } from "@mysten/sui/transactions";
+import { toast } from "sonner";
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
@@ -25,14 +26,14 @@ const formSchema = z.object({
     .positive("Amount must be greater than zero."),
 })
 
-export const DepositWithdrawForm = ({ packageId, vaultId, priceIds }: { packageId: string, vaultId: string, priceIds: string[] }) => {
+export const DepositWithdrawForm = ({ ammPackageId, tokenPackageId, vaultId, priceIds }: { ammPackageId: string, tokenPackageId: string, vaultId: string, priceIds: string[] }) => {
   const currentAccount = useCurrentAccount();
   const { mutate: signAndExecute } = useSignAndExecuteTransaction();
-  const { isRegistered, loading: registrationLoading, error: registrationError } = useRegistrationStatus()
+  const { isRegistered, isLoading: registrationIsLoading, error: registrationError } = useRegistrationStatus(ammPackageId, tokenPackageId, vaultId)
   const { priceInfoObjectIds, loading: priceInfoObjectIdsLoading, error: priceInfoObjectIdsError } = usePriceInfoObjectIds(priceIds);
 
   const deep_balance = useUserBalance("0xdeeb7a4662eec9f2f3def03fb937a663dddaa2e215b8078a284d026b7946c270::deep::DEEP");
-  const lp_balance = useUserBalance("0x76a8ea947c1211c26e84f535140e50c9c58e6ae0813ee2b44b8339a7f9b0172f::drip::DRIP");
+  const lp_balance = useUserBalance(`${tokenPackageId}::drip::DRIP`);
 
   const form = useForm<z.infer<typeof formSchema>>({
     resolver: zodResolver(formSchema),
@@ -53,7 +54,7 @@ export const DepositWithdrawForm = ({ packageId, vaultId, priceIds }: { packageI
   }
 
   function handleDeposit(amount: number) {
-    if (!currentAccount || !isPriceInfoReady) return
+    if (!currentAccount || !isRegistered || !isPriceInfoReady) return
 
     const deposit = coinWithBalance({ 
       type: "0xdeeb7a4662eec9f2f3def03fb937a663dddaa2e215b8078a284d026b7946c270::deep::DEEP",
@@ -65,14 +66,14 @@ export const DepositWithdrawForm = ({ packageId, vaultId, priceIds }: { packageI
     tx.setSenderIfNotSet(currentAccount.address);
 
     const lpTokens = tx.moveCall({
-      target: `${packageId}::mm_vault::deposit`,
-      typeArguments: ["0x76a8ea947c1211c26e84f535140e50c9c58e6ae0813ee2b44b8339a7f9b0172f::drip::DRIP"],
+      target: `${ammPackageId}::mm_vault::deposit`,
+      typeArguments: [`${tokenPackageId}::drip::DRIP`],
       arguments: [
         tx.object(vaultId!),
         tx.object(deposit),
-        tx.object(priceInfoObjectIds[0]),
-        tx.object(priceInfoObjectIds[1]),
         tx.object(priceInfoObjectIds[2]),
+        tx.object(priceInfoObjectIds[1]),
+        tx.object(priceInfoObjectIds[0]),
         tx.object("0x6")
       ]
     })
@@ -82,9 +83,12 @@ export const DepositWithdrawForm = ({ packageId, vaultId, priceIds }: { packageI
     signAndExecute({ transaction: tx }, {
       onSuccess: (result) => {
         console.log("Deposit successful: ", result);
+        form.reset();
+        toast("✅ Deposit successful")
       },
       onError: (error) => {
         console.error("Deposit failed: ", error);
+        toast("❌ Deposit failed")
       },
     });
   }
@@ -93,7 +97,7 @@ export const DepositWithdrawForm = ({ packageId, vaultId, priceIds }: { packageI
     if (!currentAccount || !isRegistered || !isPriceInfoReady) return;
 
     const lpCoin = coinWithBalance({ 
-      type: "0x76a8ea947c1211c26e84f535140e50c9c58e6ae0813ee2b44b8339a7f9b0172f::drip::DRIP",
+      type: `${tokenPackageId}::drip::DRIP`,
       balance: amount * 1_000_000_000
     });
 
@@ -102,14 +106,14 @@ export const DepositWithdrawForm = ({ packageId, vaultId, priceIds }: { packageI
     tx.setSenderIfNotSet(currentAccount.address);
 
     const deepTokens = tx.moveCall({
-      target: `${packageId}::mm_vault::withdraw`,
-      typeArguments: ["0x76a8ea947c1211c26e84f535140e50c9c58e6ae0813ee2b44b8339a7f9b0172f::drip::DRIP"],
+      target: `${ammPackageId}::mm_vault::withdraw`,
+      typeArguments: [`${tokenPackageId}::drip::DRIP`],
       arguments: [
         tx.object(vaultId!),
         tx.object(lpCoin),
-        tx.object(priceInfoObjectIds[0]),
-        tx.object(priceInfoObjectIds[1]),
         tx.object(priceInfoObjectIds[2]),
+        tx.object(priceInfoObjectIds[1]),
+        tx.object(priceInfoObjectIds[0]),
         tx.object("0x6")
       ]
     });
@@ -120,9 +124,11 @@ export const DepositWithdrawForm = ({ packageId, vaultId, priceIds }: { packageI
       onSuccess: (result) => {
         console.log("Withdraw successful: ", result);
         form.reset();
+        toast("✅ Withdraw successful")
       },
       onError: (error) => {
         console.error("Withdraw failed: ", error);
+        toast("❌ Withdraw failed")
       },
     });
   }
@@ -142,12 +148,14 @@ export const DepositWithdrawForm = ({ packageId, vaultId, priceIds }: { packageI
         <TabsTrigger value="withdraw">Withdraw</TabsTrigger>
       </TabsList>
       <TabsContent value={transferType}>
-        <div>
+        <span>
           {transferType === "deposit" ? "DEEP Balance: " : "DRIP Balance: "}
           {!deep_balance.data || !lp_balance.data ? "--" : (
-            transferType === "deposit" ? Number(deep_balance.data.totalBalance) / 1_000_000 : Number(lp_balance.data.totalBalance) / 1_000_000
+            transferType === "deposit" ? 
+              (Number(deep_balance.data.totalBalance) / 1_000_000).toFixed(2) : 
+              (Number(lp_balance.data.totalBalance) / 1_000_000_000).toFixed(2)
           )}
-        </div>
+        </span>
         <Form {...form}>
           <form onSubmit={form.handleSubmit(onSubmit)}>
             <div className="flex w-full gap-2">

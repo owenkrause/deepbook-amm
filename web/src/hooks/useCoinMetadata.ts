@@ -1,5 +1,6 @@
 import { StaticImageData } from "next/image";
 import { useSuiClientQuery } from "@mysten/dapp-kit";
+
 import suiImg from "@/assets/sui.png";
 import usdcImg from "@/assets/usdc.png";
 
