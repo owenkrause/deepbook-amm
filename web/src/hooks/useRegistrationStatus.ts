@@ -1,64 +1,42 @@
-import { useCurrentAccount, useSuiClient } from "@mysten/dapp-kit";
-import { useState, useEffect } from "react";
+import { useCurrentAccount, useSuiClientQuery } from "@mysten/dapp-kit";
+import { Transaction } from "@mysten/sui/transactions";
 
-export const useRegistrationStatus = () => {
-  const packageId = process.env.NEXT_PUBLIC_PACKAGE_ID;
-  const vaultId = process.env.NEXT_PUBLIC_VAULT_ID;
+export const useRegistrationStatus = (
+  ammPackageId: string, 
+  baseAssetType: string, 
+  quoteAssetType: string,
+  lpTokenType: string,
+  vaultId: string
+) => {
+  const account = useCurrentAccount()
 
-  const currentAccount = useCurrentAccount();
-  const client = useSuiClient();
+  const tx = new Transaction();
+  
+  if (account?.address) {
+    tx.moveCall({
+      target: `${ammPackageId}::mm_vault::is_user_registered`,
+      typeArguments: [
+        baseAssetType,
+        quoteAssetType,
+        lpTokenType
+      ],
+      arguments: [
+        tx.object(vaultId),
+        tx.pure.address(account.address),
+      ]
+    });
+  }
 
-  const [isRegistered, setIsRegistered] = useState<boolean>(false);
-  const [loading, setloading] = useState<boolean>(false);
-  const [error, setError] = useState<Error | null>(null);
+  const { data, isLoading, error } = useSuiClientQuery("devInspectTransactionBlock", {
+    transactionBlock: tx,
+    sender: "0x44e12ed495a913b594b5b73c5358b6a6516d4e3742f7a0dcdec12053b6b0aced",
+    additionalArgs: { showRawTxnDataAndEffects: true }
+  }, {
+    enabled: !!account?.address,
+    queryKey: ["registration-status", account?.address, vaultId]
+  });
 
-  useEffect(() => {
-    const checkRegistration = async () => {
-      if (!currentAccount || !packageId || !vaultId) {
-        setIsRegistered(false);
-        setError(null);
-        return;
-      }
+  const isRegistered = data?.results?.[0].returnValues?.[0][0][0] === 1;
 
-      setloading(true);
-      setError(null);
-      
-      try {
-        const result = await client.getObject({
-          id: vaultId,
-          options: {
-            showContent: true,
-          },
-        });
-
-        if (result.data?.content?.dataType === "moveObject") {
-          const vaultData = result.data.content.fields;
-          // @ts-expect-error any type
-          const userBalanceManagers = vaultData.user_balance_managers?.fields?.contents || [];
-          // @ts-expect-error any type
-          const userRegistered = userBalanceManagers.some((entry) => 
-            entry.fields.key === currentAccount.address
-          );
-          
-          setIsRegistered(userRegistered);
-        } else {
-          setIsRegistered(false);
-        }
-      } catch (err) {
-        console.error("Error checking registration:", err);
-        setError(err instanceof Error ? err : new Error('Unknown error'));
-        setIsRegistered(false);
-      } finally {
-        setloading(false);
-      }
-    };
-
-    checkRegistration();
-  }, [currentAccount, client, packageId, vaultId]);
-
-  return {
-    isRegistered,
-    loading,
-    error,
-  };
+  return { isRegistered, isLoading, error };
 };

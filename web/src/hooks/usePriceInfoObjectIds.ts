@@ -11,7 +11,7 @@ export const usePriceInfoObjectIds = (priceIds: string[]) => {
   const suiClient = useSuiClient();
 
   useEffect(() => {
-    if (!priceIds || priceIds.length === 0) return;
+    if (!priceIds || priceIds.length !== 2) return;
 
     const fetchPriceInfoObjectIds = async () => {
       try {
@@ -19,7 +19,7 @@ export const usePriceInfoObjectIds = (priceIds: string[]) => {
         setError(null);
         
         const connection = new SuiPriceServiceConnection("https://hermes.pyth.network");
-        const priceUpdateData = await connection.getPriceFeedsUpdateData(priceIds);
+        const priceFeedUpdateData = await connection.getPriceFeedsUpdateData(priceIds);
         
         const wormholeStateId = "0xaeab97f96cf9877fee2883315d459552b2b921edc16d7ceac6eab944dd88919c";
         const pythStateId = "0x1f9310238ee9298fb703c3419030b35b22bb1cc37113e3bb5007c99aec79e5b8";
@@ -27,7 +27,7 @@ export const usePriceInfoObjectIds = (priceIds: string[]) => {
         const pythClient = new SuiPythClient(suiClient, pythStateId, wormholeStateId);
         const tx = new Transaction();
         
-        const result = await pythClient.updatePriceFeeds(tx, priceUpdateData, priceIds);
+        const result = await pythClient.updatePriceFeeds(tx, priceFeedUpdateData, priceIds);
         setPriceInfoObjectIds(result);
       } catch (err) {
         setError(err instanceof Error ? err : new Error('Unknown error'));

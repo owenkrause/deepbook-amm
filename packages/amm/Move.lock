@@ -1,14 +1,12 @@
 [move]
 version = 3
-manifest_digest = "C33F55C80A1F9C23059C4C484A3E2AB24B238F0ED737F0DD34B64AAC68CD1C39"
-deps_digest = "52B406A7A21811BEF51751CF88DA0E76DAEFFEAC888D4F4060B1A72BBE7D8D35"
+manifest_digest = "0E6FC1DF31F72DABA6B18AC467226D2952A980E49846E14900074583A8354997"
+deps_digest = "F9B494B64F0615AED0E98FC12A85B85ECD2BC5185C22D30E7F67786BB52E507C"
 dependencies = [
   { id = "Pyth", name = "Pyth" },
   { id = "Sui", name = "Sui" },
   { id = "Wormhole", name = "Wormhole" },
   { id = "deepbook", name = "deepbook" },
-  { id = "token", name = "token" },
-  { id = "usdc", name = "usdc" },
 ]
 
 [[move.package]]
@@ -50,38 +48,11 @@ dependencies = [
 ]
 
 [[move.package]]
-id = "stablecoin"
-source = { git = "https://github.com/circlefin/stablecoin-sui.git", rev = "master", subdir = "packages/stablecoin" }
-
-dependencies = [
-  { id = "Sui", name = "Sui" },
-  { id = "sui_extensions", name = "sui_extensions" },
-]
-
-[[move.package]]
-id = "sui_extensions"
-source = { git = "https://github.com/circlefin/stablecoin-sui.git", rev = "master", subdir = "packages/sui_extensions" }
-
-dependencies = [
-  { id = "Sui", name = "Sui" },
-]
-
-[[move.package]]
 id = "token"
 source = { git = "https://github.com/MystenLabs/deepbookv3.git", rev = "deepbook3.1", subdir = "packages/token" }
 
 dependencies = [
   { id = "Sui", name = "Sui" },
-]
-
-[[move.package]]
-id = "usdc"
-source = { git = "https://github.com/circlefin/stablecoin-sui.git", rev = "master", subdir = "packages/usdc" }
-
-dependencies = [
-  { id = "Sui", name = "Sui" },
-  { id = "stablecoin", name = "stablecoin" },
-  { id = "sui_extensions", name = "sui_extensions" },
 ]
 
 [move.toolchain-version]
@@ -93,6 +64,6 @@ flavor = "sui"
 
 [env.mainnet]
 chain-id = "35834a8a"
-original-published-id = "0x9a84425f4ed0262191e256e65363232b857263592b7dd2aad12d60a486b16c77"
-latest-published-id = "0x9a84425f4ed0262191e256e65363232b857263592b7dd2aad12d60a486b16c77"
+original-published-id = "0x45d3ecf75ee8ceefdcb892ae0b43475d6468594e600deb486469dc43c48a802d"
+latest-published-id = "0x45d3ecf75ee8ceefdcb892ae0b43475d6468594e600deb486469dc43c48a802d"
 published-version = "1"

@@ -1,11 +1,13 @@
 import { useSuiClientQuery } from "@mysten/dapp-kit";
 
-export function useOrders(packageID: string) {
+export function useOrders(ammPackageId: string) {
   return useSuiClientQuery("queryEvents", {
     query: {
-      MoveEventType: `${packageID}::strategy::OrderCreatedEvent`
+      MoveEventType: `${ammPackageId}::strategy::OrderCreatedEvent`
     },
     limit: 25,
     order: "descending"
+  }, {
+    queryKey: ["orders"]
   });
 }
