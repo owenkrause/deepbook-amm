@@ -3,11 +3,8 @@ module deepbookamm::mm_vault;
 use sui::clock::Clock;
 use sui::coin::{Coin, TreasuryCap};
 use sui::event;
-use sui::math::pow;
+use std::u64::pow;
 use sui::vec_map::{VecMap, Self};
-use sui::sui::SUI;
-use usdc::usdc::USDC;
-use token::deep::DEEP;
 use deepbook::balance_manager;
 use pyth::{pyth, price_info, price_identifier, price, i64};
 use pyth::price_info::PriceInfoObject;
@@ -19,13 +16,12 @@ const EWithdrawAmountTooLarge: u64 = 1;
 const EMintAmountTooLarge: u64 = 2;
 const EUserNotRegistered: u64 = 3;
 
-const STANRDARD_EXPO_MAGNITUDE: u64 = 8;
-
 /// Event emitted when a deposit or withdrawal occurs
 public struct BalanceEvent has copy, drop {
   vault: ID,
   user: address,
-  asset_amount: u64,
+  base_asset_amount: u64,
+  quote_asset_amount: u64,
   lp_amount: u64, 
   deposit: bool
 }
@@ -45,26 +41,35 @@ public struct UserBalanceManager has store {
 }
 
 /// A shared object that holds funds used by the market maker
-public struct Vault<phantom P> has key, store {
+public struct Vault<phantom BaseAsset, phantom QuoteAsset, phantom T> has key, store {
   id: UID,
-  lp_treasury_cap: TreasuryCap<P>,
+  lp_treasury_cap: TreasuryCap<T>,
   user_balance_managers: VecMap<address, UserBalanceManager>,
+  base_price_id: vector<u8>,
+  quote_price_id: vector<u8>
 }
 
 /// Initializes and shares vault object
-public fun create_vault<T>(lp_treasury_cap: TreasuryCap<T>, ctx: &mut TxContext) {
-  let vault = Vault<T> {
+public fun create_vault<BaseAsset, QuoteAsset, T>(
+  lp_treasury_cap: TreasuryCap<T>, 
+  base_price_id: vector<u8>,
+  quote_price_id: vector<u8>,
+  ctx: &mut TxContext
+) {
+  let vault = Vault<BaseAsset, QuoteAsset, T> {
     id: object::new(ctx),
     lp_treasury_cap: lp_treasury_cap,
-    user_balance_managers: vec_map::empty()
+    user_balance_managers: vec_map::empty(),
+    base_price_id,
+    quote_price_id
   };
 
   sui::transfer::share_object(vault);
 }
 
 /// Register user's BalanceManager with the vault
-public fun take_bm<T>(
-  vault: &mut Vault<T>,
+public fun take_bm<BaseAsset, QuoteAsset, T>(
+  vault: &mut Vault<BaseAsset, QuoteAsset, T>,
   balance_manager: balance_manager::BalanceManager,
   trade_cap: TradeCap,
   deposit_cap: DepositCap,
@@ -89,48 +94,59 @@ public fun take_bm<T>(
 }
 
 /// Deposit into vault
-public fun deposit<T>(
-  vault: &mut Vault<T>,
-  coin: Coin<DEEP>,
-  sui_price_info_object: &PriceInfoObject, 
-  deep_price_info_object: &PriceInfoObject,
-  usdc_price_info_object: &PriceInfoObject,
+public fun deposit<BaseAsset, QuoteAsset, T>(
+  vault: &mut Vault<BaseAsset, QuoteAsset, T>,
+  base_coin: Coin<BaseAsset>,
+  quote_coin: Coin<QuoteAsset>,
+  base_asset_price_info_object: &PriceInfoObject, 
+  quote_asset_price_info_object: &PriceInfoObject,
   clock: &Clock,
   ctx: &mut TxContext,
 ): Coin<T> {
   let user = ctx.sender();
-  let deposit_amount = coin.value();
-  
-  let deep_price = get_deep_price(deep_price_info_object, clock);
-  let deposit_value = deposit_amount * deep_price;
 
   assert!(vault.user_balance_managers.contains(&user), EUserNotRegistered);
 
-  let user_bm = vault.user_balance_managers.get_mut(&user);
-  user_bm.balance_manager.deposit_with_cap(&user_bm.deposit_cap, coin, ctx);  
+  let base_deposit_amount = base_coin.value();
+  let quote_deposit_amount = quote_coin.value();
+  
+  let (base_price, base_expo) = get_price(vault.base_price_id, base_asset_price_info_object, clock);
+  let (quote_price, quote_expo) = get_price(vault.quote_price_id, quote_asset_price_info_object, clock);
+  let normalized_base_price = normalize_price(&base_price, &base_expo);
+  let normalized_quote_price = normalize_price(&quote_price, &quote_expo);
+
+  // divide the scaled values by 100_000_000 to get the true value
+  // we don't do this because it would give us decimal, so we used a scaled version of the price in USD
+  let base_value_scaled = (base_deposit_amount as u256) * normalized_base_price;
+  let quote_value_scaled = (quote_deposit_amount as u256) * normalized_quote_price;
+  let deposit_value = base_value_scaled + quote_value_scaled;
 
   let total_lp_supply = vault.lp_treasury_cap.total_supply();
   let lp_tokens_to_mint = if (total_lp_supply == 0) {
-    deposit_value as u256
+    deposit_value
   } else {
-    let (total_vault_value, _, _, _, _ ) = get_total_value(
-      vault, 
-      sui_price_info_object, 
-      deep_price_info_object, 
-      usdc_price_info_object, 
-      clock
+    let total_vault_value = get_total_value(
+    vault, 
+    base_asset_price_info_object, 
+    quote_asset_price_info_object, 
+    clock
     );
-    (deposit_value * total_lp_supply as u256) / total_vault_value
+    deposit_value * (total_lp_supply as u256) / total_vault_value
   };
 
   assert!(lp_tokens_to_mint <= (0xFFFFFFFFFFFFFFFF as u256), EMintAmountTooLarge);
+
+  let user_bm = vault.user_balance_managers.get_mut(&user);
+  user_bm.balance_manager.deposit_with_cap(&user_bm.deposit_cap, base_coin, ctx);
+  user_bm.balance_manager.deposit_with_cap(&user_bm.deposit_cap, quote_coin, ctx);  
 
   let lp = vault.lp_treasury_cap.mint(lp_tokens_to_mint as u64, ctx);
 
   event::emit(BalanceEvent {
     vault: object::id(vault),
     user: user,
-    asset_amount: deposit_amount,
+    base_asset_amount: base_deposit_amount,
+    quote_asset_amount: quote_deposit_amount,
     lp_amount: lp_tokens_to_mint as u64,
     deposit: true
   });
@@ -139,72 +155,68 @@ public fun deposit<T>(
 }
 
 /// Withdraw from vault
-public fun withdraw<T>(
-  vault: &mut Vault<T>,
+public fun withdraw<BaseAsset, QuoteAsset, T>(
+  vault: &mut Vault<BaseAsset, QuoteAsset, T>,
   lp_coin: Coin<T>,
-  sui_price_info_object: &PriceInfoObject, 
-  deep_price_info_object: &PriceInfoObject,
-  usdc_price_info_object: &PriceInfoObject,
-  clock: &Clock,
   ctx: &mut TxContext,
-): Coin<DEEP> {
+): (Coin<BaseAsset>, Coin<QuoteAsset>) {
   let user = ctx.sender();
   let lp_amount = lp_coin.value();
 
   assert!(vault.user_balance_managers.contains(&user), EUserNotRegistered);
 
-  let (total_vault_value, _, _, _, _ ) = get_total_value(
-    vault, 
-    sui_price_info_object, 
-    deep_price_info_object, 
-    usdc_price_info_object, 
-    clock
-  );
   let total_lp_supply = vault.lp_treasury_cap.total_supply();
-  let user_vault_share = (lp_amount as u256 * total_vault_value) / (total_lp_supply as u256);
+  let user_vault_share = (lp_amount as u256) / (total_lp_supply as u256);
 
-  let deep_price = get_deep_price(deep_price_info_object, clock);
-  let deep_to_withdraw = user_vault_share / (deep_price as u256);
+  let (total_base_balance, total_quote_balance) = get_vault_balance(vault);
 
-  assert!(deep_to_withdraw <= (0xFFFFFFFFFFFFFFFF as u256), EWithdrawAmountTooLarge);
+  let base_to_withdraw = (total_base_balance as u256) * user_vault_share;
+  let quote_to_withdraw = (total_quote_balance as u256) * user_vault_share;
+
+  assert!(base_to_withdraw <= (0xFFFFFFFFFFFFFFFF as u256), EWithdrawAmountTooLarge);
+  assert!(quote_to_withdraw <= (0xFFFFFFFFFFFFFFFF as u256), EWithdrawAmountTooLarge);
 
   let user_bm = vault.user_balance_managers.get_mut(&user);
-  let deep_coin = user_bm.balance_manager.withdraw_with_cap<DEEP>(&user_bm.withdraw_cap, deep_to_withdraw as u64, ctx);
+  let base_coin = user_bm.balance_manager.withdraw_with_cap<BaseAsset>(&user_bm.withdraw_cap, base_to_withdraw as u64, ctx);
+  let quote_coin = user_bm.balance_manager.withdraw_with_cap<QuoteAsset>(&user_bm.withdraw_cap, quote_to_withdraw as u64, ctx);
+
   vault.lp_treasury_cap.burn(lp_coin);
 
   event::emit(BalanceEvent {
     vault: object::id(vault),
     user: user,
-    asset_amount: deep_coin.value(),
+    base_asset_amount: base_coin.value(),
+    quote_asset_amount: quote_coin.value(),
     lp_amount: lp_amount,
     deposit: false,
   });
 
-  deep_coin
+  (base_coin, quote_coin)
 }
 
 /// Get the balance manager of the vault
-public fun get_user_balance_manager<T>(vault: &mut Vault<T>, user: address): &mut balance_manager::BalanceManager {
+public fun get_user_balance_manager<BaseAsset, QuoteAsset, T>(vault: &mut Vault<BaseAsset, QuoteAsset, T>, user: address): &mut balance_manager::BalanceManager {
   assert!(vault.user_balance_managers.contains(&user), EUserNotRegistered);
   let user_bm = vault.user_balance_managers.get_mut(&user);
   &mut user_bm.balance_manager
 }
 
 /// Get the trade cap of a specific user
-public fun get_user_trade_cap<T>(vault: &mut Vault<T>, user: address): &mut TradeCap {
+public fun get_user_trade_cap<BaseAsset, QuoteAsset, T>(vault: &mut Vault<BaseAsset, QuoteAsset, T>, user: address): &mut TradeCap {
   assert!(vault.user_balance_managers.contains(&user), EUserNotRegistered);
   let user_bm = vault.user_balance_managers.get_mut(&user);
   &mut user_bm.trade_cap
 }
 
 /// Check if user is registered
-public fun is_user_registered<T>(vault: &Vault<T>, user: address): bool {
+public fun is_user_registered<BaseAsset, QuoteAsset, T>(vault: &Vault<BaseAsset, QuoteAsset, T>, user: address): bool {
   vault.user_balance_managers.contains(&user)
 }
 
-/// Get total balance of a specific coin type in the vault
-public fun get_vault_balance<T, P>(vault: &Vault<T>): u64 {
-  let mut total_balance: u64 = 0;
+/// Get total balance of base and quote asset
+public fun get_vault_balance<BaseAsset, QuoteAsset, T>(vault: &Vault<BaseAsset, QuoteAsset, T>): (u64, u64) {
+  let mut total_base_asset_balance: u64 = 0;
+  let mut total_quote_asset_balance: u64 = 0;
   
   let mut i = 0;
   let user_addresses = vault.user_balance_managers.keys();
@@ -214,29 +226,29 @@ public fun get_vault_balance<T, P>(vault: &Vault<T>): u64 {
     let user_addr = user_addresses[i];
     let user_bm = vault.user_balance_managers.get(&user_addr);
     
-    total_balance = total_balance + user_bm.balance_manager.balance<P>();
+    total_base_asset_balance = total_base_asset_balance + user_bm.balance_manager.balance<BaseAsset>();
+    total_quote_asset_balance = total_quote_asset_balance + user_bm.balance_manager.balance<QuoteAsset>();
     
     i = i + 1;
   };
   
-  total_balance
+  (total_base_asset_balance, total_quote_asset_balance)
 }
 
 /// Get total value of vault
-public fun get_total_value<T>(
-  vault: &Vault<T>, 
-  sui_price_info_object: &PriceInfoObject, 
-  deep_price_info_object: &PriceInfoObject,
-  usdc_price_info_object: &PriceInfoObject,
+public fun get_total_value<BaseAsset, QuoteAsset, T>(
+  vault: &Vault<BaseAsset, QuoteAsset, T>, 
+  base_asset_price_info_object: &PriceInfoObject,
+  quote_asset_price_info_object: &PriceInfoObject, 
   clock: &Clock,
-): (u256, u256, u256, u256, u64) {
-  let usdc_price = get_usdc_price(usdc_price_info_object, clock);
-  let sui_price = get_sui_price(sui_price_info_object, clock);
-  let deep_price = get_deep_price(deep_price_info_object, clock);
+): u256 {
+  let (base_price, base_expo) = get_price(vault.base_price_id, base_asset_price_info_object, clock);
+  let (quote_price, quote_expo) = get_price(vault.quote_price_id, quote_asset_price_info_object, clock);
 
-  let mut usdc_total_value: u256 = 0;
-  let mut sui_total_value: u256 = 0;
-  let mut deep_total_value: u256 = 0;
+  let normalized_base_price = normalize_price(&base_price, &base_expo);
+  let normalized_quote_price = normalize_price(&quote_price, &quote_expo);
+
+  let mut total_value: u256 = 0;
 
   let mut i = 0;
   let user_addresses = vault.user_balance_managers.keys();
@@ -245,75 +257,57 @@ public fun get_total_value<T>(
     let user_addr = user_addresses[i];
     let user_bm = vault.user_balance_managers.get(&user_addr);
 
-    usdc_total_value = usdc_total_value + (user_bm.balance_manager.balance<USDC>() as u256) * (usdc_price as u256);
-    sui_total_value = sui_total_value + (user_bm.balance_manager.balance<SUI>() as u256) * (sui_price as u256);
-    deep_total_value = deep_total_value + (user_bm.balance_manager.balance<DEEP>() as u256) * (deep_price as u256);
+    total_value = total_value + (user_bm.balance_manager.balance<BaseAsset>() as u256) * (normalized_base_price);
+    total_value = total_value + (user_bm.balance_manager.balance<QuoteAsset>() as u256) * (normalized_quote_price);
 
     i = i + 1;
   };
 
-  let total_value = usdc_total_value + sui_total_value + deep_total_value;
-
-  (total_value, usdc_total_value, sui_total_value, deep_total_value, STANRDARD_EXPO_MAGNITUDE)
+  total_value
 }
 
-/// Get price of USDC
-fun get_usdc_price(price_info_object: &PriceInfoObject, clock: &Clock): u64 {
+/// Get price of asset
+public fun get_price(coin_price_id: vector<u8>, price_info_object: &PriceInfoObject, clock: &Clock): (i64::I64, i64::I64) {
   let max_age = 60;
   let price_struct = pyth::get_price_no_older_than(price_info_object, clock, max_age);
   let price_info = price_info::get_price_info_from_price_info_object(price_info_object);
   let price_id = price_identifier::get_bytes(&price_info::get_price_identifier(&price_info));
 
-  assert!(price_id == x"eaa020c61cc479712813461ce153894a96a6c00b21ed0cfc2798d1f9a9e9c94a", EInvalidID);
+  assert!(price_id == coin_price_id, EInvalidID);
 
   let price = price::get_price(&price_struct);
   let expo = price::get_expo(&price_struct);
 
-  normalize_price(&price, &expo)
+  (price, expo)
 }
 
-/// Get price of SUI
-fun get_sui_price(price_info_object: &PriceInfoObject, clock: &Clock): u64 {
-  let max_age = 60;
-  let price_struct = pyth::get_price_no_older_than(price_info_object, clock, max_age);
-  let price_info = price_info::get_price_info_from_price_info_object(price_info_object);
-  let price_id = price_identifier::get_bytes(&price_info::get_price_identifier(&price_info));
-
-  assert!(price_id == x"23d7315113f5b1d3ba7a83604c44b94d79f4fd69af77f804fc7f920a6dc65744", EInvalidID);
-
-  let price = price::get_price(&price_struct);
-  let expo = price::get_expo(&price_struct);
-
-  normalize_price(&price, &expo)
-}
-
-/// Get price of DEEP
-fun get_deep_price(price_info_object: &PriceInfoObject, clock: &Clock): u64 {
-  let max_age = 60;
-  let price_struct = pyth::get_price_no_older_than(price_info_object, clock, max_age);
-  let price_info = price_info::get_price_info_from_price_info_object(price_info_object);
-  let price_id = price_identifier::get_bytes(&price_info::get_price_identifier(&price_info));
-
-  assert!(price_id == x"29bdd5248234e33bd93d3b81100b5fa32eaa5997843847e2c2cb16d7c6d9f7ff", EInvalidID);
-
-  let price = price::get_price(&price_struct);
-  let expo = price::get_expo(&price_struct);
-
-  normalize_price(&price, &expo)
-}
-
-/// Normalizes the price
-fun normalize_price(
-  price: &i64::I64,
-  expo: &i64::I64
-): u64 {
-  let price_magnitude = price.get_magnitude_if_positive();
-  let expo_magnitude = expo.get_magnitude_if_negative();
-
-  let normalized_price = if (expo_magnitude < STANRDARD_EXPO_MAGNITUDE) {
-    price_magnitude / pow(10,  (STANRDARD_EXPO_MAGNITUDE - expo_magnitude) as u8)
+/// Normalize the price
+fun normalize_price(price: &i64::I64, expo: &i64::I64): u256 {
+  let price_magnitude = if (price.get_is_negative()) {
+    price.get_magnitude_if_negative()
   } else {
-    price_magnitude * pow(10,  (expo_magnitude - STANRDARD_EXPO_MAGNITUDE) as u8)
+    price.get_magnitude_if_positive()
+  };
+
+  let expo_magnitude = if (expo.get_is_negative()) {
+    expo.get_magnitude_if_negative()
+  } else {
+    expo.get_magnitude_if_positive()
+  };
+
+  let target_expo: u64 = 8;
+
+  let normalized_price = if (expo.get_is_negative()) {
+    if (expo_magnitude >= target_expo) {
+      let scale_down = pow(10, (expo_magnitude - target_expo) as u8);
+      (price_magnitude as u256) / (scale_down as u256)
+    } else {
+      let scale_up = pow(10, (target_expo - expo_magnitude) as u8);
+      (price_magnitude as u256) * (scale_up as u256)
+    }
+  } else {
+    let scale_up = pow(10, (expo_magnitude + target_expo) as u8);
+    (price_magnitude as u256) * (scale_up as u256)
   };
 
   normalized_price

@@ -11,7 +11,7 @@ export const usePriceInfoObjectIds = (priceIds: string[]) => {
   const suiClient = useSuiClient();
 
   useEffect(() => {
-    if (!priceIds || priceIds.length !== 3) return;
+    if (!priceIds || priceIds.length !== 2) return;
 
     const fetchPriceInfoObjectIds = async () => {
       try {

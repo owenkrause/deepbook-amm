@@ -6,5 +6,8 @@ export function useUserBalance(coinType: string) {
   return useSuiClientQuery("getBalance", {
     owner: currentAccount?.address || "",
     coinType: coinType
-  }, { enabled: !!currentAccount?.address })
+  }, { 
+    enabled: !!currentAccount?.address ,
+    queryKey: ["user-balance", currentAccount?.address]
+  })
 }

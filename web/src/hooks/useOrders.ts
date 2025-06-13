@@ -7,5 +7,7 @@ export function useOrders(ammPackageId: string) {
     },
     limit: 25,
     order: "descending"
+  }, {
+    queryKey: ["orders"]
   });
 }
