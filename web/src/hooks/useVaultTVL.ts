@@ -40,7 +40,6 @@ export function useVaultTVL(
     queryKey: ["vault-tvl", vaultId]
   });
 
-  console.log(data)
   const tvl = useMemo(() => {
     if (!data?.results?.[0]?.returnValues?.[0]) {
       return null;
