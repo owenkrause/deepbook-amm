@@ -7,12 +7,6 @@ import { Accordion } from "@/components/ui/accordion";
 import { VAULTS_STORAGE_KEY, VaultData } from "./utils/page";
 
 const ammPackageId = process.env.NEXT_PUBLIC_AMM_PACKAGE_ID;
-const tokenPackageId = process.env.NEXT_PUBLIC_TOKEN_PACKAGE_ID;
-const vaultId = process.env.NEXT_PUBLIC_VAULT_ID;
-
-const baseAssetType = process.env.NEXT_PUBLIC_BASE_ASSET_TYPE;
-const quoteAssetType = process.env.NEXT_PUBLIC_QUOTE_ASSET_TYPE;
-const lpTokenType = process.env.NEXT_PUBLIC_LP_TOKEN_TYPE;
 
 const priceIds = [
   process.env.NEXT_PUBLIC_PRICE_ID_SUI_USD,
@@ -20,7 +14,7 @@ const priceIds = [
 ].filter((id): id is string => id !== undefined);
 
 export default function Home() {
-  if (!ammPackageId || !tokenPackageId || !vaultId || !baseAssetType || !quoteAssetType || !lpTokenType || priceIds.length !== 2) throw new Error("Missing environmental variables");
+  if (!ammPackageId || priceIds.length !== 2) throw new Error("Missing environmental variables");
 
   const currentAccount = useCurrentAccount();
   const { mutate: disconnect } = useDisconnectWallet();
