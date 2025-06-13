@@ -7,7 +7,13 @@ import { Transaction } from "@mysten/sui/transactions";
 
 const ammPackageId = process.env.NEXT_PUBLIC_AMM_PACKAGE_ID;
 
-const VAULTS_STORAGE_KEY = "deepmaker_vaults";
+export const VAULTS_STORAGE_KEY = "deepmaker_vaults";
+export type VaultData = {
+  id: string,
+  baseAsset: string,
+  quoteAsset: string,
+  lpToken: string
+}
 
 export default function Utils() {
   if (!ammPackageId) throw new Error("Missing environmental variables");
@@ -74,7 +80,7 @@ export default function Utils() {
         const vaultId = result.objectChanges?.find(object => object.type === "created")?.objectId;
         if (vaultId) {
           setVaultId(vaultId);
-          saveVault();
+          saveVault(vaultId);
         }
         
         toast("✅ Vault creation successful")
@@ -87,10 +93,10 @@ export default function Utils() {
     });
   }
 
-  const saveVault = () => {
-    const existingVaults = JSON.parse(localStorage.getItem(VAULTS_STORAGE_KEY) || "[]");
+  const saveVault = (vaultId: string) => {
+    const existingVaults: VaultData[] = JSON.parse(localStorage.getItem(VAULTS_STORAGE_KEY) || "[]");
 
-    const vault = {
+    const vault: VaultData = {
       id: vaultId,
       baseAsset,
       quoteAsset,
