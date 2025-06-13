@@ -1,18 +1,38 @@
 "use client";
 
 import { useState } from "react";
-import { ConnectModal, useCurrentAccount, useDisconnectWallet, useSignAndExecuteTransaction } from "@mysten/dapp-kit";
-import { Transaction } from "@mysten/sui/transactions";
 import { toast } from "sonner";
+import { useSuiClient, ConnectModal, useCurrentAccount, useDisconnectWallet, useSignAndExecuteTransaction } from "@mysten/dapp-kit";
+import { Transaction } from "@mysten/sui/transactions";
 
 const ammPackageId = process.env.NEXT_PUBLIC_AMM_PACKAGE_ID;
+
+export const VAULTS_STORAGE_KEY = "deepmaker_vaults";
+export type VaultData = {
+  id: string,
+  baseAsset: string,
+  quoteAsset: string,
+  lpToken: string
+}
 
 export default function Utils() {
   if (!ammPackageId) throw new Error("Missing environmental variables");
 
   const account = useCurrentAccount();
   const { mutate: disconnect } = useDisconnectWallet();
-  const { mutate: signAndExecute } = useSignAndExecuteTransaction();
+  const client = useSuiClient();
+  const { mutate: signAndExecute } = useSignAndExecuteTransaction({
+    execute: async ({ bytes, signature }) => 
+      await client.executeTransactionBlock({
+				transactionBlock: bytes,
+				signature,
+				options: {
+					showRawEffects: true,
+					showObjectChanges: true,
+				},
+			}),
+  });
+
   const [lpToken, setLpToken] = useState("");
   const [baseAsset, setBaseAsset] = useState("");
   const [quoteAsset, setQuoteAsset] = useState("");
@@ -20,7 +40,7 @@ export default function Utils() {
   const [quoteAssetPriceId, setQuoteAssetPriceId] = useState("");
   const [treasuryCapId, setTreasuryCapId] = useState("");
   const [open, setOpen] = useState(false);
-  const [result, setResult] = useState<any>();
+  const [vaultId, setVaultId] = useState("");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
 
@@ -57,7 +77,12 @@ export default function Utils() {
     signAndExecute({ transaction: tx }, {
       onSuccess: (result) => {
         console.log("Vault creation successful:", result);
-        setResult(result);
+        const vaultId = result.objectChanges?.find(object => object.type === "created")?.objectId;
+        if (vaultId) {
+          setVaultId(vaultId);
+          saveVault(vaultId);
+        }
+        
         toast("✅ Vault creation successful")
       },
       onError: (error) => {
@@ -66,6 +91,22 @@ export default function Utils() {
         toast("❌ Vault creation failed")
       },
     });
+  }
+
+  const saveVault = (vaultId: string) => {
+    const existingVaults: VaultData[] = JSON.parse(localStorage.getItem(VAULTS_STORAGE_KEY) || "[]");
+
+    const vault: VaultData = {
+      id: vaultId,
+      baseAsset,
+      quoteAsset,
+      lpToken
+    }
+
+    existingVaults.push(vault)
+
+    localStorage.setItem(VAULTS_STORAGE_KEY, JSON.stringify(existingVaults));
+    console.log("Vault saved to storage:", vault);
   }
 
   return (
@@ -160,8 +201,8 @@ export default function Utils() {
           className="bg-secondary border rounded px-2 py-1 text-sm hover:bg-secondary/80 disabled:hover:bg-secondary"
         >Create</button>
 
-        {result && (
-          <pre>{result.digest}</pre>
+        {vaultId && (
+          <pre>{vaultId}</pre>
         )}
 
         {error && (

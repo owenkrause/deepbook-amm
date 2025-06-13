@@ -40,7 +40,6 @@ export function useVaultTVL(
     queryKey: ["vault-tvl", vaultId]
   });
 
-  console.log(data)
   const tvl = useMemo(() => {
     if (!data?.results?.[0]?.returnValues?.[0]) {
       return null;
@@ -50,7 +49,7 @@ export function useVaultTVL(
 
     if (returnValue[1] === "u256") {
       const bytes = new Uint8Array(returnValue[0]);
-      const totalValueString = bcs.u64().parse(bytes);
+      const totalValueString = bcs.u256().parse(bytes);
       return Number(totalValueString);
     }
 

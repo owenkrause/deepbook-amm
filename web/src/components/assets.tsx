@@ -10,7 +10,7 @@ type AssetProps = {
   vaultId: string;
 }
 
-export function Assets({ ammPackageId, baseAssetType, quoteAssetType, lpTokenType, vaultId }: AssetProps) {
+export const Assets = ({ ammPackageId, baseAssetType, quoteAssetType, lpTokenType, vaultId }: AssetProps) => {
   const { data, isLoading, error} = useVaultBalance(ammPackageId, baseAssetType, quoteAssetType, lpTokenType, vaultId);
   const baseAssetMetadata = useCoinMetadata(baseAssetType);
   const quoteAssetMetadata = useCoinMetadata(quoteAssetType);
