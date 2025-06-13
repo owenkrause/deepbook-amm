@@ -56,9 +56,9 @@ export const DepositWithdrawForm = ({ ammPackageId, baseAssetType, quoteAssetTyp
   } = useRegistrationStatus(ammPackageId, baseAssetType, quoteAssetType, lpTokenType, vaultId);
   const { priceInfoObjectIds, loading: priceInfoObjectIdsLoading, error: priceInfoObjectIdsError } = usePriceInfoObjectIds(priceIds);
 
-  const baseAssetBalance = useUserBalance(baseAssetType);
-  const quoteAssetBalance = useUserBalance(quoteAssetType);
-  const lpBalance = useUserBalance(lpTokenType);
+  const { data: baseAssetBalance } = useUserBalance(baseAssetType);
+  const { data: quoteAssetBalance } = useUserBalance(quoteAssetType);
+  const { data: lpBalance } = useUserBalance(lpTokenType);
 
   const { 
     data: baseAssetMetadata,
@@ -100,7 +100,10 @@ export const DepositWithdrawForm = ({ ammPackageId, baseAssetType, quoteAssetTyp
   })
 
   const isPriceInfoReady = priceInfoObjectIds && priceInfoObjectIds.length == 2;
-  if (!lpTokenMetadata || !baseAssetMetadata || !quoteAssetMetadata || !priceData || !isPriceInfoReady) return null;
+  if (
+    !lpTokenMetadata || !baseAssetMetadata || !quoteAssetMetadata || 
+    !priceData || !isPriceInfoReady || !baseAssetBalance || !quoteAssetBalance || !lpBalance
+  ) return null;
 
   function onDepositSubmit(values: z.infer<typeof depositFormSchema>) {
     handleDeposit(values.baseAmount, values.quoteAmount);
@@ -111,7 +114,7 @@ export const DepositWithdrawForm = ({ ammPackageId, baseAssetType, quoteAssetTyp
   }
 
   function handleDeposit(baseAmount: number, quoteAmount: number) {
-    if (!currentAccount || !isRegistered || !isPriceInfoReady || !baseAssetMetadata || !quoteAssetMetadata) return;
+    if (!currentAccount || !isPriceInfoReady || !baseAssetMetadata || !quoteAssetMetadata) return;
 
     const baseDeposit = coinWithBalance({ 
       type: baseAssetType,
@@ -126,6 +129,44 @@ export const DepositWithdrawForm = ({ ammPackageId, baseAssetType, quoteAssetTyp
     const tx = new Transaction();
 
     tx.setSenderIfNotSet(currentAccount.address);
+
+    if (!isRegistered) {
+      const balanceManager = tx.moveCall({
+        target: `0xcaf6ba059d539a97646d47f0b9ddf843e138d215e2a12ca1f4585d386f7aec3a::balance_manager::new`,
+        arguments: []
+      });
+  
+      const tradeCap = tx.moveCall({
+        target: `0xcaf6ba059d539a97646d47f0b9ddf843e138d215e2a12ca1f4585d386f7aec3a::balance_manager::mint_trade_cap`,
+        arguments: [balanceManager]
+      });
+  
+      const depositCap = tx.moveCall({
+        target: `0xcaf6ba059d539a97646d47f0b9ddf843e138d215e2a12ca1f4585d386f7aec3a::balance_manager::mint_deposit_cap`,
+        arguments: [balanceManager]
+      });
+  
+      const withdrawCap = tx.moveCall({
+        target: `0xcaf6ba059d539a97646d47f0b9ddf843e138d215e2a12ca1f4585d386f7aec3a::balance_manager::mint_withdraw_cap`,
+        arguments: [balanceManager]
+      });
+
+      tx.moveCall({
+        target: `${ammPackageId}::mm_vault::take_bm`,
+        typeArguments: [
+          baseAssetType,
+          quoteAssetType,
+          lpTokenType
+        ],
+        arguments: [
+          tx.object(vaultId!),
+          balanceManager,
+          tradeCap,
+          depositCap,
+          withdrawCap
+        ]
+      });
+    }
 
     const lpTokens = tx.moveCall({
       target: `${ammPackageId}::mm_vault::deposit`,
@@ -203,7 +244,7 @@ export const DepositWithdrawForm = ({ ammPackageId, baseAssetType, quoteAssetTyp
   const quoteAmount = (baseAmount * priceData.basePrice) / priceData.quotePrice
   const quoteAmountRounded = Math.round(quoteAmount * Math.pow(10, quoteAssetMetadata.decimals)) / Math.pow(10, quoteAssetMetadata.decimals)
   depositForm.setValue("quoteAmount", quoteAmountRounded)
-
+  
   return (
     <Tabs defaultValue="deposit">
       <TabsList className="w-full">
@@ -213,12 +254,16 @@ export const DepositWithdrawForm = ({ ammPackageId, baseAssetType, quoteAssetTyp
       <TabsContent value="deposit">
         <div className="pb-2">
           <div className="flex flex-col gap-2">
-            <span>{`${baseAssetMetadata.symbol} Balance: ${(Number(baseAssetBalance.data?.totalBalance) / Math.pow(10, baseAssetMetadata.decimals)).toFixed(2)}`}</span>
-            <span>{`${quoteAssetMetadata.symbol} Balance: ${(Number(quoteAssetBalance.data?.totalBalance) / Math.pow(10, quoteAssetMetadata.decimals)).toFixed(2)}`}</span>
+            <span>
+              {`${baseAssetMetadata.symbol} Balance: ${(Number(baseAssetBalance.totalBalance) / Math.pow(10, baseAssetMetadata.decimals)).toFixed(2)}`}
+            </span>
+            <span>
+              {`${quoteAssetMetadata.symbol} Balance: ${(Number(quoteAssetBalance.totalBalance) / Math.pow(10, quoteAssetMetadata.decimals)).toFixed(2)}`}
+            </span>
           </div>
         </div>
         <Form {...depositForm}>
-          <form onSubmit={depositForm.handleSubmit(onDepositSubmit)} className="flex gap-2">
+          <form onSubmit={depositForm.handleSubmit(onDepositSubmit)} className="flex gap-2 pb-1">
             <FormField
               control={depositForm.control}
               name="baseAmount"
@@ -227,7 +272,7 @@ export const DepositWithdrawForm = ({ ammPackageId, baseAssetType, quoteAssetTyp
                   <FormControl>
                     <Input 
                       {...field}
-                      disabled={!isRegistered || !currentAccount || !isPriceInfoReady}
+                      disabled={!currentAccount || !isPriceInfoReady}
                     />
                   </FormControl>
                   <FormMessage />
@@ -236,12 +281,14 @@ export const DepositWithdrawForm = ({ ammPackageId, baseAssetType, quoteAssetTyp
             />
             <Button 
               type="submit"
-              disabled={!isRegistered || !currentAccount || !isPriceInfoReady}
+              disabled={!currentAccount || !isPriceInfoReady}
             >
               Deposit
             </Button>
           </form>
         </Form>
+
+        <span className="text-white/60 text-xs">{baseAmount} {baseAssetMetadata.symbol} | {quoteAmount.toFixed(2)} {quoteAssetMetadata.symbol}</span>
 
         {priceInfoObjectIdsLoading && (
           <div className="text-sm text-muted-foreground mt-2">
@@ -260,12 +307,11 @@ export const DepositWithdrawForm = ({ ammPackageId, baseAssetType, quoteAssetTyp
             Price feeds not available
           </div>
         )}
-        <span className="text-white/60">{baseAmount} {baseAssetMetadata.symbol} | {quoteAmount.toFixed(4)} {quoteAssetMetadata.symbol}</span>
       </TabsContent>
 
       <TabsContent value="withdraw">
         <div className="pb-2">
-          {`${lpTokenMetadata.name} Balance: ${(Number(lpBalance.data?.totalBalance) / Math.pow(10, lpTokenMetadata.decimals)).toFixed(2)}`}
+          {`${lpTokenMetadata.name} Balance: ${(Number(lpBalance.totalBalance) / Math.pow(10, lpTokenMetadata.decimals)).toFixed(2)}`}
         </div>
         <Form {...withdrawForm}>
           <form onSubmit={withdrawForm.handleSubmit(onWithdrawSubmit)} className="flex gap-2">
@@ -277,7 +323,7 @@ export const DepositWithdrawForm = ({ ammPackageId, baseAssetType, quoteAssetTyp
                   <FormControl>
                     <Input 
                       {...field}
-                      disabled={!isRegistered || !currentAccount || !isPriceInfoReady}
+                      disabled={Number(lpBalance.totalBalance) / Math.pow(10, lpTokenMetadata.decimals) < 1 || !currentAccount || !isPriceInfoReady}
                     />
                   </FormControl>
                   <FormMessage />
@@ -286,7 +332,7 @@ export const DepositWithdrawForm = ({ ammPackageId, baseAssetType, quoteAssetTyp
             />
             <Button 
               type="submit"
-              disabled={!isRegistered || !currentAccount || !isPriceInfoReady}
+              disabled={Number(lpBalance.totalBalance) / Math.pow(10, lpTokenMetadata.decimals) < 1 || !currentAccount || !isPriceInfoReady}
             >
               Withdraw
             </Button>
