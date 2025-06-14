@@ -12,12 +12,10 @@ import {
   FormControl,
   FormField,
   FormItem,
-  FormLabel,
   FormMessage,
 } from "@/components/ui/form"
 
 import { usePriceInfoObjectIds } from "@/hooks/usePriceInfoObjectIds";
-import { useRegistrationStatus } from "@/hooks/useRegistrationStatus";
 import { useUserBalance } from "@/hooks/useUserBalance";
 import { useTokenPrices } from "@/hooks/useTokenPrices";
 
@@ -49,11 +47,6 @@ type DepositWithdrawFormProps = {
 export const DepositWithdrawForm = ({ ammPackageId, baseAssetType, quoteAssetType, lpTokenType, vaultId, priceIds }: DepositWithdrawFormProps) => {
   const currentAccount = useCurrentAccount();
   const { mutate: signAndExecute } = useSignAndExecuteTransaction();
-  const { 
-    isRegistered, 
-    isLoading: registrationIsLoading, 
-    error: registrationError 
-  } = useRegistrationStatus(ammPackageId, baseAssetType, quoteAssetType, lpTokenType, vaultId);
   const { priceInfoObjectIds, loading: priceInfoObjectIdsLoading, error: priceInfoObjectIdsError } = usePriceInfoObjectIds(priceIds);
 
   const { data: baseAssetBalance } = useUserBalance(baseAssetType);
@@ -130,44 +123,6 @@ export const DepositWithdrawForm = ({ ammPackageId, baseAssetType, quoteAssetTyp
 
     tx.setSenderIfNotSet(currentAccount.address);
 
-    if (!isRegistered) {
-      const balanceManager = tx.moveCall({
-        target: `0xcaf6ba059d539a97646d47f0b9ddf843e138d215e2a12ca1f4585d386f7aec3a::balance_manager::new`,
-        arguments: []
-      });
-  
-      const tradeCap = tx.moveCall({
-        target: `0xcaf6ba059d539a97646d47f0b9ddf843e138d215e2a12ca1f4585d386f7aec3a::balance_manager::mint_trade_cap`,
-        arguments: [balanceManager]
-      });
-  
-      const depositCap = tx.moveCall({
-        target: `0xcaf6ba059d539a97646d47f0b9ddf843e138d215e2a12ca1f4585d386f7aec3a::balance_manager::mint_deposit_cap`,
-        arguments: [balanceManager]
-      });
-  
-      const withdrawCap = tx.moveCall({
-        target: `0xcaf6ba059d539a97646d47f0b9ddf843e138d215e2a12ca1f4585d386f7aec3a::balance_manager::mint_withdraw_cap`,
-        arguments: [balanceManager]
-      });
-
-      tx.moveCall({
-        target: `${ammPackageId}::mm_vault::take_bm`,
-        typeArguments: [
-          baseAssetType,
-          quoteAssetType,
-          lpTokenType
-        ],
-        arguments: [
-          tx.object(vaultId!),
-          balanceManager,
-          tradeCap,
-          depositCap,
-          withdrawCap
-        ]
-      });
-    }
-
     const lpTokens = tx.moveCall({
       target: `${ammPackageId}::mm_vault::deposit`,
       typeArguments: [
@@ -201,7 +156,7 @@ export const DepositWithdrawForm = ({ ammPackageId, baseAssetType, quoteAssetTyp
   }
 
   function handleWithdraw(amount: number) {
-    if (!currentAccount || !isRegistered || !isPriceInfoReady || !lpTokenMetadata) return;
+    if (!currentAccount || !isPriceInfoReady || !lpTokenMetadata) return;
 
     const lpCoin = coinWithBalance({ 
       type: lpTokenType,
