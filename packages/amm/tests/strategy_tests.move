@@ -12,7 +12,7 @@ use deepbook::balance_manager::{Self, BalanceManager, TradeCap};
 use deepbook::pool::{Self, Pool};
 use deepbook::registry::{Self, Registry};
 use deepbook::constants;
-use deepbookamm::strategy::{create_spread_order};
+use deepbookamm::mm_vault::{create_spread_order};
 use deepbook::pool::place_limit_order;
 use deepbook::order_info::{OrderInfo};
 
