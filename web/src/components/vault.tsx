@@ -29,8 +29,6 @@ export const Vault = ({ ammPackageId, priceIds, vaultId, baseAssetType, quoteAss
   const baseAssetMetadata = useCoinMetadata(baseAssetType);
   const quoteAssetMetadata = useCoinMetadata(quoteAssetType);
 
-  console.log(tvl)
-
   if (!baseAssetMetadata || !quoteAssetMetadata) return null;
 
   return (

@@ -266,7 +266,7 @@ export const DepositWithdrawForm = ({ ammPackageId, baseAssetType, quoteAssetTyp
 
       <TabsContent value="withdraw">
         <div className="pb-2">
-          {`${lpTokenMetadata.name} Balance: ${(Number(lpBalance.totalBalance) / Math.pow(10, lpTokenMetadata.decimals)).toFixed(2)}`}
+          {`${lpTokenMetadata.symbol} Balance: ${(Number(lpBalance.totalBalance) / Math.pow(10, lpTokenMetadata.decimals)).toFixed(2)}`}
         </div>
         <Form {...withdrawForm}>
           <form onSubmit={withdrawForm.handleSubmit(onWithdrawSubmit)} className="flex gap-2">

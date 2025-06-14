@@ -67,9 +67,9 @@ export default function Home() {
                 ammPackageId={ammPackageId} 
                 priceIds={priceIds}
                 vaultId={vault.id}
-                baseAssetType={vault.baseAsset}
-                quoteAssetType={vault.quoteAsset}
-                lpTokenType={vault.lpToken}
+                baseAssetType={vault.baseAssetType}
+                quoteAssetType={vault.quoteAssetType}
+                lpTokenType={vault.lpTokenType}
               />
             )}
           </Accordion>

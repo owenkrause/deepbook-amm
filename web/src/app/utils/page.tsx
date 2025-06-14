@@ -10,9 +10,9 @@ const ammPackageId = process.env.NEXT_PUBLIC_AMM_PACKAGE_ID;
 export const VAULTS_STORAGE_KEY = "deepmaker_vaults";
 export type VaultData = {
   id: string,
-  baseAsset: string,
-  quoteAsset: string,
-  lpToken: string
+  baseAssetType: string,
+  quoteAssetType: string,
+  lpTokenType: string
 }
 
 export default function Utils() {
@@ -33,11 +33,11 @@ export default function Utils() {
 			}),
   });
 
-  const [lpToken, setLpToken] = useState("");
-  const [baseAsset, setBaseAsset] = useState("");
-  const [quoteAsset, setQuoteAsset] = useState("");
-  const [baseAssetPriceId, setBaseAssetPriceId] = useState("");
-  const [quoteAssetPriceId, setQuoteAssetPriceId] = useState("");
+  const [lpTokenType, setlpTokenType] = useState("");
+  const [baseAssetType, setbaseAssetType] = useState("");
+  const [quoteAssetType, setquoteAssetType] = useState("");
+  const [baseAssetTypePriceId, setbaseAssetTypePriceId] = useState("");
+  const [quoteAssetTypePriceId, setquoteAssetTypePriceId] = useState("");
   const [treasuryCapId, setTreasuryCapId] = useState("");
   const [open, setOpen] = useState(false);
   const [vaultId, setVaultId] = useState("");
@@ -50,7 +50,7 @@ export default function Utils() {
       return;
     }
 
-    if (!lpToken || !baseAsset || !quoteAsset || !baseAssetPriceId || !quoteAssetPriceId || !treasuryCapId) {
+    if (!lpTokenType || !baseAssetType || !quoteAssetType || !baseAssetTypePriceId || !quoteAssetTypePriceId || !treasuryCapId) {
       setError("All fields must be filled");
       return;
     }
@@ -60,27 +60,42 @@ export default function Utils() {
 
     const tx = new Transaction();
 
-    tx.moveCall({
+    const [tradeCap] = tx.moveCall({
       target: `${ammPackageId}::mm_vault::create_vault`,
       typeArguments: [
-        baseAsset,
-        quoteAsset,
-        lpToken,
+        baseAssetType,
+        quoteAssetType,
+        lpTokenType,
       ],
       arguments: [
         tx.object(treasuryCapId),
-        tx.pure.vector("u8", Array.from(Buffer.from(baseAssetPriceId.slice(2), "hex"))),
-        tx.pure.vector("u8", Array.from(Buffer.from(quoteAssetPriceId.slice(2), "hex"))),
+        tx.pure.vector("u8", Array.from(Buffer.from(baseAssetTypePriceId.slice(2), "hex"))),
+        tx.pure.vector("u8", Array.from(Buffer.from(quoteAssetTypePriceId.slice(2), "hex"))),
       ],
     });
+
+    tx.transferObjects([tradeCap], tx.pure.address(account.address));
 
     signAndExecute({ transaction: tx }, {
       onSuccess: (result) => {
         console.log("Vault creation successful:", result);
-        const vaultId = result.objectChanges?.find(object => object.type === "created")?.objectId;
-        if (vaultId) {
+        const vaultId = result.objectChanges?.find(object => 
+          object.type === "created" &&
+          object.objectType === `${ammPackageId}::mm_vault::Vault<${baseAssetType}, ${quoteAssetType}, ${lpTokenType}>`
+        // @ts-expect-error idk
+        )?.objectId; 
+        const tradeCapId = result.objectChanges?.find(object => 
+          object.type === "created" &&
+          object.objectType === `${ammPackageId}::mm_vault::TradeCap`
+        // @ts-expect-error idk
+        )?.objectId; 
+
+        if (vaultId && tradeCapId) {
           setVaultId(vaultId);
           saveVault(vaultId);
+
+          console.log("vault id:", vaultId);
+          console.log("trade cap id:", tradeCapId);
         }
         
         toast("✅ Vault creation successful")
@@ -98,9 +113,9 @@ export default function Utils() {
 
     const vault: VaultData = {
       id: vaultId,
-      baseAsset,
-      quoteAsset,
-      lpToken
+      baseAssetType,
+      quoteAssetType,
+      lpTokenType
     }
 
     existingVaults.push(vault)
@@ -128,35 +143,35 @@ export default function Utils() {
               onOpenChange={(isOpen) => setOpen(isOpen)}
             />
         )}
-        <label htmlFor="lpToken" className="text-sm">
+        <label htmlFor="lpTokenType" className="text-sm">
           LP Token Type
         </label>
         <input
-          id="lpToken"
+          id="lpTokenType"
           type="text"
-          onChange={(e) => setLpToken(e.target.value)}
+          onChange={(e) => setlpTokenType(e.target.value)}
           placeholder="0x..."
           disabled={loading}
           className="border rounded px-2 py-1 outline-0 text-sm"
         />
-        <label htmlFor="baseAsset" className="text-sm">
+        <label htmlFor="baseAssetType" className="text-sm">
           Base Asset Type
         </label>
         <input
-          id="baseAsset"
+          id="baseAssetType"
           type="text"
-          onChange={(e) => setBaseAsset(e.target.value)}
+          onChange={(e) => setbaseAssetType(e.target.value)}
           placeholder="0x..."
           disabled={loading}
           className="border rounded px-2 py-1 outline-0 text-sm"
         />
-        <label htmlFor="quoteAsset" className="text-sm">
+        <label htmlFor="quoteAssetType" className="text-sm">
           Quote Asset Type
         </label>
         <input
-          id="quoteAsset"
+          id="quoteAssetType"
           type="text"
-          onChange={(e) => setQuoteAsset(e.target.value)}
+          onChange={(e) => setquoteAssetType(e.target.value)}
           placeholder="0x..."
           disabled={loading}
           className="border rounded px-2 py-1 outline-0 text-sm"
@@ -172,24 +187,24 @@ export default function Utils() {
           disabled={loading}
           className="border rounded px-2 py-1 outline-0 text-sm"
         />
-        <label htmlFor="baseAssetPriceId" className="text-sm">
+        <label htmlFor="baseAssetTypePriceId" className="text-sm">
           Base Asset Price ID
         </label>
         <input
-          id="baseAssetPriceId"
+          id="baseAssetTypePriceId"
           type="text"
-          onChange={(e) => setBaseAssetPriceId(e.target.value)}
+          onChange={(e) => setbaseAssetTypePriceId(e.target.value)}
           placeholder="0x..."
           disabled={loading}
           className="border rounded px-2 py-1 outline-0 text-sm"
         />
-        <label htmlFor="quoteAssetPriceId" className="text-sm">
+        <label htmlFor="quoteAssetTypePriceId" className="text-sm">
           Quote Asset Price ID
         </label>
         <input
           id="quotAssetPriceId"
           type="text"
-          onChange={(e) => setQuoteAssetPriceId(e.target.value)}
+          onChange={(e) => setquoteAssetTypePriceId(e.target.value)}
           placeholder="0x..."
           disabled={loading}
           className="border rounded px-2 py-1 outline-0 text-sm"
@@ -220,13 +235,3 @@ export default function Utils() {
     </div>
   );
 }
-
-/*
-example
-lpToken: 0x20dfbb342d493c899c0033704d10a46b835b53ab8f501adb13f02098da3d6d9::drip::DRIP
-baseAsset: 0xdeeb7a4662eec9f2f3def03fb937a663dddaa2e215b8078a284d026b7946c270::deep::DEEP
-quoteAsset: 0x2::sui::SUI
-treasurycap: 
-base asset priceId: 0x29bdd5248234e33bd93d3b81100b5fa32eaa5997843847e2c2cb16d7c6d9f7ff
-quote asset priceId: 0x23d7315113f5b1d3ba7a83604c44b94d79f4fd69af77f804fc7f920a6dc65744
-*/
