@@ -1,0 +1,20 @@
+{
+  "name": "deepmaker",
+  "version": "1.0.0",
+  "main": "dist/index.js",
+  "scripts": {
+    "start": "node dist/index.js",
+    "dev": "dotenv -e .env.local -- tsx src/index.ts",
+    "build": "tsc",
+    "watch": "tsx watch src/index.ts"
+  },
+  "devDependencies": {
+    "@types/node": "^24.0.1",
+    "typescript": "^5.8.3"
+  },
+  "dependencies": {
+    "@mysten/deepbook-v3": "^0.15.2",
+    "@mysten/sui": "^1.33.0",
+    "dotenv": "^16.5.0"
+  }
+}
